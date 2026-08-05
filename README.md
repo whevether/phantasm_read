@@ -11,6 +11,9 @@ Cross-platform Flutter package for comic and novel reading (Dart UI; no custom M
 | Comic | `extended_image: 10.1.0` (`ExtendedImageGesturePageView` + gesture zoom) |
 | EPUB | Offline `epub.js` + `webview_flutter: 4.14.1` |
 | Text | `.txt` / `.md` / `.html` (Dart rendering, UTF-8 / GBK) |
+| Reading direction | Comic vertical/horizontal (+ RTL); novel vertical scroll / horizontal paging |
+| Chapters | EPUB TOC picker; text heading detection (`第x章` / `Chapter N` / `#`) |
+| Theme colors | Novel background / foreground presets via toolbar + `ReaderSettings` |
 | Brightness | `screen_brightness`, overlay fallback when unsupported |
 | Keep screen on | `wakelock_plus` |
 | Novel typography | Font size / line height / font family |

@@ -11,6 +11,9 @@
 | 漫画 | `extended_image: 10.1.0`（`ExtendedImageGesturePageView` + 手势缩放） |
 | EPUB | 离线 `epub.js` + `webview_flutter: 4.14.1` |
 | 文本 | `.txt` / `.md` / `.html`（Dart 渲染，UTF-8 / GBK） |
+| 阅读方向 | 漫画竖滑/横翻（含 RTL）；小说竖滚/横翻 |
+| 章节 | EPUB 目录选章；文本按标题识别（`第x章` / `Chapter N` / `#`） |
+| 主题色 | 小说背景/前景色板 + `ReaderSettings` |
 | 亮度 | `screen_brightness`，不支持时遮罩降级 |
 | 不熄屏 | `wakelock_plus` |
 | 小说字体 | 字号 / 行高 / 字体家族 |

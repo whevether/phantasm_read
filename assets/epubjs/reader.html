@@ -17,6 +17,7 @@
   <script>
     let book = null;
     let rendition = null;
+    let currentFlow = 'paginated';
 
     function post(type, payload) {
       try {
@@ -34,33 +35,72 @@
       return bytes.buffer;
     }
 
+    function simplifyToc(items) {
+      return (items || []).map(function (item) {
+        return {
+          label: item.label || '',
+          href: item.href || '',
+          children: simplifyToc(item.subitems || [])
+        };
+      });
+    }
+
+    function bindRelocated() {
+      if (!rendition) return;
+      rendition.on('relocated', function (location) {
+        const cfi = location && location.start ? location.start.cfi : null;
+        const percentage = (location && location.start && location.start.percentage != null)
+          ? location.start.percentage
+          : null;
+        post('locationChanged', { cfi: cfi, percentage: percentage });
+      });
+    }
+
     async function ensureRendition() {
       if (!book) throw new Error('book not opened');
       if (!rendition) {
-        rendition = book.renderTo('viewer', {
+        const opts = {
           width: '100%',
           height: '100%',
-          flow: 'paginated',
+          flow: currentFlow || 'paginated',
           allowScriptedContent: true
-        });
-        rendition.on('relocated', function (location) {
-          const cfi = location && location.start ? location.start.cfi : null;
-          const percentage = (location && location.start && location.start.percentage != null)
-            ? location.start.percentage
-            : (book.locations && book.locations.percentageFromCfi
-                ? book.locations.percentageFromCfi(cfi)
-                : null);
-          post('locationChanged', { cfi: cfi, percentage: percentage });
-        });
+        };
+        if (currentFlow === 'scrolled') {
+          opts.manager = 'continuous';
+        }
+        rendition = book.renderTo('viewer', opts);
+        bindRelocated();
       }
       return rendition;
     }
 
-    window.epubBridge = {
-      async openFromBase64(base64) {
+    async function recreateRendition(keepCfi) {
+      let cfi = keepCfi || null;
+      if (!cfi && rendition) {
         try {
+          const loc = rendition.currentLocation();
+          if (loc && loc.start) cfi = loc.start.cfi;
+        } catch (e) {}
+      }
+      if (rendition) {
+        try { rendition.destroy(); } catch (e) {}
+        rendition = null;
+        const el = document.getElementById('viewer');
+        if (el) el.innerHTML = '';
+      }
+      await ensureRendition();
+      await rendition.display(cfi || undefined);
+    }
+
+    window.epubBridge = {
+      async openFromBase64(base64, flow) {
+        try {
+          if (flow) currentFlow = flow;
           if (book) { try { book.destroy(); } catch (e) {} }
           book = ePub(base64ToArrayBuffer(base64));
+          rendition = null;
+          const el = document.getElementById('viewer');
+          if (el) el.innerHTML = '';
           await ensureRendition();
           await rendition.display();
           post('ready', { ok: true });
@@ -83,15 +123,20 @@
         await rendition.display(target || undefined);
       },
       async getToc() {
-        if (!book) return [];
+        if (!book) return '[]';
         const nav = await book.loaded.navigation;
-        return (nav && nav.toc) ? nav.toc : [];
+        return JSON.stringify(simplifyToc(nav && nav.toc ? nav.toc : []));
       },
       async getLocation() {
         if (!rendition) return null;
         const loc = rendition.currentLocation();
         if (!loc || !loc.start) return null;
         return { cfi: loc.start.cfi, percentage: loc.start.percentage };
+      },
+      async setFlow(flow) {
+        currentFlow = flow === 'scrolled' ? 'scrolled' : 'paginated';
+        if (!book) return;
+        await recreateRendition();
       },
       setFontSize(percent) {
         if (!rendition) return;
@@ -107,6 +152,7 @@
       },
       setTheme(bg, fg) {
         if (!rendition) return;
+        document.body.style.background = bg || '#ffffff';
         rendition.themes.default({
           body: { background: bg || '#ffffff', color: fg || '#000000' }
         });

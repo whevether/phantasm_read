@@ -21,4 +21,19 @@ void main() {
     expect(NovelSource.markdown('/a.md'), isA<NovelSourceMarkdown>());
     expect(NovelSource.html('/a.html'), isA<NovelSourceHtml>());
   });
+  test('NovelChapter fromJson', () {
+    final chapter = NovelChapter.fromJson({
+      'label': '第一章',
+      'href': 'chap1.xhtml',
+      'children': [
+        {'label': '1.1', 'href': 'chap1.xhtml#a'},
+      ],
+    });
+    expect(chapter.title, '第一章');
+    expect(chapter.flattened.length, 2);
+  });
+
+  test('NovelThemePreset defaults', () {
+    expect(NovelThemePreset.defaults, isNotEmpty);
+  });
 }

@@ -124,6 +124,10 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
 风过松林，发出细碎的声响。他在溪边坐下，翻开书页——文字像溪水一样流淌。
 
 夜色降临时，篝火旁的字号似乎也跟着跳动。他调亮灯火，继续读下去。
+
+第三章 城门
+
+城墙上旗帜翻飞。他把书收好，抬头望向开敞的城门。
 ''';
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/phantasm_sample.txt');
