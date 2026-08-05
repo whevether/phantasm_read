@@ -1,19 +1,21 @@
 # phantasm_read
 
-跨平台 Flutter 漫画 / 小说阅读器 package（纯 Dart UI，无自研 MethodChannel）。
+Cross-platform Flutter package for comic and novel reading (Dart UI; no custom MethodChannel).
 
-## 能力
+[中文文档](README_zh.md)
 
-| 模块 | 实现 |
-|------|------|
-| 漫画 | `extended_image: 10.1.0`（`ExtendedImageGesturePageView` + gesture） |
-| EPUB | 离线 `epub.js` + `webview_flutter: 4.14.1` |
-| 文本 | `.txt` / `.md` / `.html`（Dart 渲染，UTF-8 / GBK） |
-| 亮度 | `screen_brightness`，失败则遮罩 |
-| 不熄屏 | `wakelock_plus` |
-| 小说字体 | 字号 / 行高 / 字体家族 |
+## Features
 
-## 快速使用
+| Area | Implementation |
+|------|----------------|
+| Comic | `extended_image: 10.1.0` (`ExtendedImageGesturePageView` + gesture zoom) |
+| EPUB | Offline `epub.js` + `webview_flutter: 4.14.1` |
+| Text | `.txt` / `.md` / `.html` (Dart rendering, UTF-8 / GBK) |
+| Brightness | `screen_brightness`, overlay fallback when unsupported |
+| Keep screen on | `wakelock_plus` |
+| Novel typography | Font size / line height / font family |
+
+## Quick start
 
 ```dart
 import 'package:phantasm_read/phantasm_read.dart';
@@ -36,19 +38,23 @@ NovelReader(
 );
 ```
 
-## 平台说明
+## Platforms
 
-- 漫画 / 文本：Android、iOS、Web、macOS、Windows、Linux
-- EPUB：优先 Android / iOS；桌面依赖 `webview_flutter` 平台实现；Web 需 JS interop 路径（当前返回明确提示）
-- 本地文件页（`fromFiles` / 文本路径）：Web 不支持，请用 `fromUrls` / `fromBytes` 或非 Web 平台
+- Comic / text: Android, iOS, Web, macOS, Windows, Linux
+- EPUB: Android / iOS first; desktop depends on `webview_flutter` platform support; Web needs a JS interop path (explicit message today)
+- Local file pages (`fromFiles` / text paths): not supported on Web — use `fromUrls` / `fromBytes` or a non-Web platform
 
-## 示例
+## Example
 
 ```bash
 cd example
 flutter run
 ```
 
-## 开发约定
+## Development notes
 
-实现细节遵循仓库内 Agent Skill：`.cursor/skills/flutter-reader-plugin/`。
+Implementation guidance lives in the repo Agent Skill: `.cursor/skills/flutter-reader-plugin/`.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) (English) and [CHANGELOG_zh.md](CHANGELOG_zh.md) (Chinese).
