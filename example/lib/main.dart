@@ -37,7 +37,6 @@ class _HomePage extends StatefulWidget {
 
 class _HomePageState extends State<_HomePage> {
   final ExampleReaderOptions _options = ExampleReaderOptions();
-
   @override
   void dispose() {
     _options.dispose();
@@ -207,14 +206,28 @@ class _ComicDemoPageState extends State<_ComicDemoPage> {
     brightness: 0.85,
     keepScreenOn: true,
   );
-
+  @override
+  void initState() {
+    super.initState();
+    _settings = _settings.copyWith(doublePage: widget.options.comicDoublePage);
+    widget.options.addListener(_onOptionsChanged);
+  }
+  @override
+  void dispose() {
+    widget.options.removeListener(_onOptionsChanged);
+    super.dispose();
+  }
+  void _onOptionsChanged() {
+    setState(() {
+      _settings = _settings.copyWith(doublePage: widget.options.comicDoublePage);
+    });
+  }
   @override
   Widget build(BuildContext context) {
     final o = widget.options;
     return AnimatedBuilder(
       animation: o,
       builder: (context, _) {
-        final settings = _settings.copyWith(doublePage: o.comicDoublePage);
         return Scaffold(
           appBar: AppBar(
             title: const Text('Comic'),
@@ -241,7 +254,7 @@ class _ComicDemoPageState extends State<_ComicDemoPage> {
               'https://picsum.photos/seed/phantasm5/800/1200',
             ]),
             readingMode: ComicReadingMode.vertical,
-            settings: settings,
+            settings: _settings,
             rtl: o.comicRtl,
             persistSettings: false,
             maxReadablePages: o.comicMaxReadable,

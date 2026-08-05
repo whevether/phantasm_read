@@ -80,10 +80,17 @@ class _ComicReaderState extends State<ComicReader>
   String get _bookId =>
       widget.bookId ?? 'comic_${widget.pages.length}_${widget.pages.hashCode}';
 
-  int get _pageCount {
+  bool get _doublePageActive =>
+      _settings.doublePage &&
+      _mode == ComicReadingMode.horizontal &&
+      widget.pages.length > 1;
+
+  int _pageCountFor({bool? doublePage, ComicReadingMode? mode}) {
+    final dp = doublePage ?? _settings.doublePage;
+    final m = mode ?? _mode;
     final total = () {
-      if (_settings.doublePage &&
-          _mode == ComicReadingMode.horizontal &&
+      if (dp &&
+          m == ComicReadingMode.horizontal &&
           widget.pages.length > 1) {
         return (widget.pages.length / 2).ceil();
       }
@@ -92,11 +99,48 @@ class _ComicReaderState extends State<ComicReader>
     return trialPageCount(total, widget.maxReadablePages);
   }
 
+  int get _pageCount => _pageCountFor();
+
   int _rawIndex(int logical) {
-    if (_settings.doublePage && _mode == ComicReadingMode.horizontal) {
+    if (_doublePageActive) {
       return (logical * 2).clamp(0, widget.pages.length - 1);
     }
     return logical.clamp(0, widget.pages.length - 1);
+  }
+
+  int get _currentRawIndex {
+    if (_doublePageActive) {
+      return (_currentPage * 2).clamp(0, widget.pages.length - 1);
+    }
+    return _currentPage.clamp(0, widget.pages.length - 1);
+  }
+
+  int _logicalIndexForRaw(
+    int raw, {
+    bool? doublePage,
+    ComicReadingMode? mode,
+  }) {
+    final dp = doublePage ?? _settings.doublePage;
+    final m = mode ?? _mode;
+    final count = _pageCountFor(doublePage: dp, mode: m);
+    if (count == 0) return 0;
+    if (dp && m == ComicReadingMode.horizontal) {
+      return (raw ~/ 2).clamp(0, count - 1);
+    }
+    return raw.clamp(0, count - 1);
+  }
+
+  void _syncPageIndexAfterLayoutChange() {
+    final logical = _logicalIndexForRaw(_currentRawIndex);
+    _currentPage = logical;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = _pageController;
+      if (controller == null || !controller.hasClients) return;
+      if (controller.page?.round() != logical) {
+        controller.jumpToPage(logical);
+      }
+    });
   }
 
   @override
@@ -170,12 +214,18 @@ class _ComicReaderState extends State<ComicReader>
   void didUpdateWidget(covariant ComicReader oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.settings != widget.settings) {
+      final wasDouble = _doublePageActive;
+      final raw = _currentRawIndex;
       _settings = widget.settings;
+      _currentPage = _logicalIndexForRaw(raw);
       _brightness.apply(_settings.brightness);
       if (_settings.keepScreenOn) {
         ReaderWakeLock.enable();
       } else {
         ReaderWakeLock.disable();
+      }
+      if (wasDouble != _doublePageActive) {
+        _syncPageIndexAfterLayoutChange();
       }
     }
   }
@@ -213,14 +263,32 @@ class _ComicReaderState extends State<ComicReader>
       final raw = _rawIndex(i);
       await precacheImage(_providerAt(raw), context);
       if (!mounted) return;
-      if (_settings.doublePage && raw + 1 < widget.pages.length) {
+      if (_doublePageActive && raw + 1 < widget.pages.length) {
         await precacheImage(_providerAt(raw + 1), context);
       }
     }
   }
 
   void _emitSettings(ReaderSettings next) {
-    setState(() => _settings = next);
+    final wasDouble = _doublePageActive;
+    final enablingDouble = next.doublePage && !_settings.doublePage;
+    var nextMode = _mode;
+    if (enablingDouble && _mode == ComicReadingMode.vertical) {
+      nextMode = ComicReadingMode.horizontal;
+    }
+    final raw = _currentRawIndex;
+    setState(() {
+      _settings = next;
+      _mode = nextMode;
+      _currentPage = _logicalIndexForRaw(
+        raw,
+        doublePage: next.doublePage,
+        mode: nextMode,
+      );
+    });
+    if (wasDouble != _doublePageActive) {
+      _syncPageIndexAfterLayoutChange();
+    }
     _brightness.apply(next.brightness);
     if (next.keepScreenOn) {
       ReaderWakeLock.enable();
@@ -272,9 +340,7 @@ class _ComicReaderState extends State<ComicReader>
 
   Widget _buildPage(int logicalIndex) {
     final raw = _rawIndex(logicalIndex);
-    if (_settings.doublePage &&
-        _mode == ComicReadingMode.horizontal &&
-        raw + 1 < widget.pages.length) {
+    if (_doublePageActive && raw + 1 < widget.pages.length) {
       return Row(
         children: [
           Expanded(child: _image(raw)),
@@ -395,7 +461,8 @@ class _ComicReaderState extends State<ComicReader>
               return GestureDetector(
                 onTap: () {
                   Navigator.pop(context);
-                  final logical = _settings.doublePage ? index ~/ 2 : index;
+                  final logical =
+                      _doublePageActive ? index ~/ 2 : index;
                   _goToPage(logical);
                 },
                 child: Image(image: _providerAt(index), fit: BoxFit.cover),
@@ -469,6 +536,9 @@ class _ComicReaderState extends State<ComicReader>
                         _onTapZone(action);
                       },
                       child: ExtendedImageGesturePageView.builder(
+                        key: ValueKey(
+                          '${_mode.name}-${_settings.doublePage}-$_pageCount',
+                        ),
                         itemCount: _pageCount,
                         controller: controller,
                         scrollDirection: _mode == ComicReadingMode.vertical
@@ -508,7 +578,14 @@ class _ComicReaderState extends State<ComicReader>
                     settings: _settings,
                     mode: _mode,
                     bookmarked: bookmarked,
-                    onModeChanged: (mode) => setState(() => _mode = mode),
+                    onModeChanged: (mode) {
+                      final raw = _currentRawIndex;
+                      setState(() {
+                        _mode = mode;
+                        _currentPage = _logicalIndexForRaw(raw, mode: mode);
+                      });
+                      _syncPageIndexAfterLayoutChange();
+                    },
                     onSettingsChanged: _emitSettings,
                     onToggleBookmark: _toggleBookmark,
                     onShowBookmarks: _showBookmarks,
@@ -609,13 +686,23 @@ class _ComicToolbar extends StatelessWidget {
                       icon: const Icon(Icons.fit_screen, color: Colors.white),
                     ),
                     IconButton(
-                      tooltip: '双页',
+                      tooltip: settings.doublePage
+                          ? '关闭双页'
+                          : mode == ComicReadingMode.vertical
+                              ? '双页（将切换为横向）'
+                              : '双页',
                       onPressed: () => onSettingsChanged(
                         settings.copyWith(doublePage: !settings.doublePage),
                       ),
                       icon: Icon(
-                        Icons.chrome_reader_mode,
-                        color: settings.doublePage ? Colors.amber : Colors.white,
+                        settings.doublePage
+                            ? Icons.menu_book
+                            : Icons.menu_book_outlined,
+                        color: settings.doublePage
+                            ? (mode == ComicReadingMode.horizontal
+                                ? Colors.amber
+                                : Colors.amber.withValues(alpha: 0.45))
+                            : Colors.white,
                       ),
                     ),
                     IconButton(
