@@ -88,7 +88,7 @@ PdfReader(
 - 缩略图网格跳页
 - 键盘方向键 / 音量键翻页（RTL 时方向反向）
 - 点击分区：左翻 / 中显隐工具栏 / 右翻（`tapZonesEnabled`）
-- 试读：`maxReadablePages` 截断可读页
+- 试读：`trialLimit` + `onTrialLimitReached`（插件拦截越界并回调；**不内置弹窗/遮罩**，UI 由宿主处理）
 - 进度持久化：`persistProgress` → `ReaderProgressStore`
 - 回调：`onPageChanged`、`onSessionTick`（约 30s）、`onSync`
 
@@ -102,15 +102,18 @@ PdfReader(
 
 ### 主要构造参数
 
-`pages` · `bookId` · `readingMode` · `settings` · `rtl` · `initialPage` · `persistProgress` · `persistSettings` · `maxReadablePages` · `watermarkText` · `enableInk` · `pageTurnEffect` · `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` · `showToolbar`
+`pages` · `bookId` · `readingMode` · `settings` · `rtl` · `initialPage` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `pageTurnEffect` · `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` · `showToolbar`
 
 ```dart
 ComicReader(
   bookId: 'comic_1',
   pages: ComicPages.fromUrls(urls),
   readingMode: ComicReadingMode.horizontal,
-  rtl: false,
-  maxReadablePages: 3,
+  trialLimit: ReaderTrialLimit.pages(3, startPage: 0),
+  onTrialLimitReached: (event) {
+    // 弹窗 / SnackBar / 跳转购买页等，由宿主决定
+    // event.limit / currentIndex / targetIndex / totalCount / action
+  },
   watermarkText: 'user@example.com',
   enableInk: true,
   onSync: (payload) async { /* 上传 progress / bookmarks */ },
@@ -162,8 +165,9 @@ ComicReader(
 - 主题预设：`NovelThemePreset.defaults`（Cream / White / Sepia / Green / Dark / AMOLED）
 - 竖读 ↔ 横读切换、亮度、不熄屏
 - 自动滚屏（**文本路径**）、TTS、Media Overlay 播放 / 暂停
-- 顶栏进度条按章节比例跳转
+- 顶栏进度条按章节比例跳转（试读时按可读章节范围）
 - 键盘 / 音量键翻页；点击分区翻页或调出工具栏
+- 试读：`trialLimit`（按**章**计数）+ `onTrialLimitReached`；正文截断、目录/搜索/翻章越界时回调宿主
 - 水印、手绘：`watermarkText` / `enableInk`
 
 ### TTS 与有声
@@ -176,12 +180,14 @@ ComicReader(
 
 ### 主要构造参数
 
-`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `maxReadablePages` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · `onSettingsChanged` · `onLocationChanged` · `onChaptersLoaded` · `onChapterChanged` · `onSessionTick` · `onSync` · `onKaraokeCue` · `showToolbar` · `rtl`
+`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · `onSettingsChanged` · `onLocationChanged` · `onChaptersLoaded` · `onChapterChanged` · `onSessionTick` · `onSync` · `onKaraokeCue` · `showToolbar` · `rtl`
 
 ```dart
 NovelReader(
   bookId: 'novel_1',
   source: NovelSource.epub('/path/to/book.epub'),
+  trialLimit: ReaderTrialLimit.chapters(3, startChapter: 0),
+  onTrialLimitReached: (event) { /* 宿主自定义 UI */ },
   watermarkText: 'trial',
   enableInk: true,
   mediaOverlaySource: UrlSource('https://example.com/narration.mp3'),
@@ -214,7 +220,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 | 导航 | 滑动翻页、点击分区、方向键 / 音量键、顶栏进度条拖拽 |
 | 亮度 / 常亮 | `ReaderSettings.brightness`、`keepScreenOn` |
 | 水印 | `watermarkText` |
-| 试读 | `maxReadablePages` 限制可读页 + 遮罩 |
+| 试读 | `trialLimit` 限制可读页 + `onTrialLimitReached` 回调（无内置遮罩） |
 | 进度 | `persistProgress` 保存 `pageIndex` 与 `percentage` |
 | 回调 | `onPageChanged` |
 | 参数 | `rasterDpi`（默认 120，可调清晰度 / 性能） |
@@ -223,11 +229,53 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 PdfReader(
   bookId: 'doc_1',
   source: PdfSource.file('/path/to/doc.pdf'),
-  maxReadablePages: 5,
+  trialLimit: ReaderTrialLimit.pages(5, startPage: 0),
+  onTrialLimitReached: (event) { /* 宿主自定义 UI */ },
   watermarkText: 'CONFIDENTIAL',
   rasterDpi: 120,
 );
 ```
+
+---
+
+## 试读（`ReaderTrialLimit`）
+
+三端统一用 `trialLimit` 描述试读窗口，用 `onTrialLimitReached` 把越界事件交给宿主。**包内不展示试读结束 UI**（弹窗、SnackBar、遮罩等由集成方实现）。
+
+### 配置
+
+| 字段 | 说明 |
+|------|------|
+| `maxCount` | 可读页数（漫画/PDF）或章数（小说） |
+| `startIndex` | 起始页 / 章（0 起） |
+| `unit` | `ReaderTrialUnit.page` 或 `.chapter` |
+
+工厂方法：
+
+```dart
+ReaderTrialLimit.pages(3, startPage: 0);      // 漫画 / PDF
+ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
+```
+
+### 回调 `ReaderTrialLimitEvent`
+
+| 字段 | 说明 |
+|------|------|
+| `limit` | 当前试读配置 |
+| `currentIndex` | 当前页 / 章索引 |
+| `targetIndex` | 用户试图前往的页 / 章 |
+| `totalCount` | 总页数 / 章数 |
+| `action` | `next` · `seek` · `chapterSelect` · `search` |
+
+### 行为摘要
+
+| 模块 | 试读单位 | 插件行为 |
+|------|----------|----------|
+| 漫画 | 页 | 截断 `PageView`；翻页 / 跳页 / 缩略图越界时回调 |
+| 小说 | 章 | 截断正文段落；翻章 / 目录 / 搜索 / 翻页越界时回调 |
+| PDF | 页 | 截断 `PageView`；翻页 / 跳页越界时回调 |
+
+辅助函数（兼容旧写法）：`trialPageCount` · `clampTrialPage` · `trialLimited` · `atTrialEnd`。
 
 ---
 
@@ -275,7 +323,8 @@ PdfReader(
 | `TapZoneDetector` / `TapZoneAction` | 左翻 / 中工具栏 / 右翻（含 RTL） |
 | `ReaderProgressBar` | 顶栏进度条 |
 | `ReaderWatermark` | 水印叠加 |
-| `clampTrialPage` / `trialPageCount` | 试读页数辅助 |
+| `ReaderTrialLimit` / `ReaderTrialLimitEvent` / `onTrialLimitReached` | 试读窗口与越界回调 |
+| `trialPageCount` / `clampTrialPage` / `trialLimited` / `atTrialEnd` | 试读辅助（基于 `ReaderTrialLimit.pages`） |
 | `InkAnnotationLayer` / `InkStroke` | 手绘、undo/clear、JSON 序列化 |
 | `PageCurl` / `CurlPageView` / `PageTurnEffect` | 仿真翻页组件（可单独使用） |
 | `MediaOverlayPlayer` / `AudiobookController` | 有声与卡拉 OK |
@@ -287,7 +336,8 @@ PdfReader(
 | 项 | 现状 |
 |----|------|
 | `ComicReader.pageTurnEffect` | 参数已声明；漫画主路径仍为 `ExtendedImageGesturePageView`，需自行使用 `CurlPageView` |
-| `NovelReader.maxReadablePages` | 字段已暴露；小说正文路径尚未截断（漫画 / PDF 已生效） |
+| 漫画双页 | 仅横向生效；开启双页时若当前为竖向会自动切横向 |
+| EPUB 试读 | 章级拦截与回调；EPUB 内连续翻页越界依赖章节边界，深度跳转可能需宿主配合 |
 | EPUB TTS | 文本路径可读当前段；EPUB 侧不朗读正文 |
 | 自动滚屏 | 仅文本路径；EPUB 无效 |
 | Media Overlay → EPUB | karaoke 按段落跳转，不跟 CFI |
@@ -310,9 +360,11 @@ flutter run
 
 | 入口 | 演示内容 |
 |------|----------|
-| 漫画阅读器 | 网络图、水印、试读 3 页、手绘、`onSync` SnackBar、导出书签 |
-| 小说阅读器（文本） | 临时 txt、主题 / TTS、水印、手绘、导出 JSON、同步 |
-| PDF 阅读器 | 内存样例 PDF、水印、试读提示 |
+| 漫画阅读器 | 网络图、试读 3 页（默认弹窗反馈）、手绘、`onSync` SnackBar、导出书签 |
+| 小说阅读器（文本） | 12 章样例、试读 3 章、主题 / TTS、导出 JSON、同步 |
+| PDF 阅读器 | 5 页样例 PDF、试读 3 页、`onTrialLimitReached` 演示 |
+
+示例「高级设置」可配置试读页/章数、起始页/章，以及触顶反馈方式（弹窗 / SnackBar / 无）。
 
 ---
 

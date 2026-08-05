@@ -88,7 +88,7 @@ Powered by `extended_image` **10.1.0**.
 - Thumbnail grid jump
 - Keyboard / volume keys (reversed under RTL)
 - Tap zones: prev / toggle toolbar / next (`tapZonesEnabled`)
-- Trial: `maxReadablePages` caps readable pages
+- Trial: `trialLimit` + `onTrialLimitReached` (blocks out-of-range navigation and callbacks to host; **no built-in dialog/overlay**)
 - Persistence: `persistProgress` → `ReaderProgressStore`
 - Callbacks: `onPageChanged`, `onSessionTick` (~30s), `onSync`
 
@@ -102,14 +102,18 @@ Powered by `extended_image` **10.1.0**.
 
 ### Constructor highlights
 
-`pages` · `bookId` · `readingMode` · `settings` · `rtl` · `initialPage` · `persistProgress` · `persistSettings` · `maxReadablePages` · `watermarkText` · `enableInk` · `pageTurnEffect` · `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` · `showToolbar`
+`pages` · `bookId` · `readingMode` · `settings` · `rtl` · `initialPage` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `pageTurnEffect` · `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` · `showToolbar`
 
 ```dart
 ComicReader(
   bookId: 'comic_1',
   pages: ComicPages.fromUrls(urls),
   readingMode: ComicReadingMode.horizontal,
-  maxReadablePages: 3,
+  trialLimit: ReaderTrialLimit.pages(3, startPage: 0),
+  onTrialLimitReached: (event) {
+    // Dialog, SnackBar, paywall, etc. — host decides
+    // event.limit / currentIndex / targetIndex / totalCount / action
+  },
   watermarkText: 'user@example.com',
   enableInk: true,
   onSync: (payload) async { /* upload progress / bookmarks */ },
@@ -161,8 +165,9 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 - Themes: `NovelThemePreset.defaults` (Cream / White / Sepia / Green / Dark / AMOLED)
 - Vertical ↔ horizontal, brightness, keep-awake
 - Auto-scroll (**text path**), TTS, media-overlay play/pause
-- Top progress bar seeks by chapter ratio
+- Top progress bar seeks by chapter ratio (trial-aware readable range)
 - Keyboard / volume keys; tap zones
+- Trial: `trialLimit` (counts **chapters**) + `onTrialLimitReached`; body truncation; callbacks on chapter list / search / paging overflow
 - Watermark / ink: `watermarkText` / `enableInk`
 
 ### TTS & audio
@@ -175,12 +180,14 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 
 ### Constructor highlights
 
-`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `maxReadablePages` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · callbacks · `showToolbar` · `rtl`
+`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · callbacks · `showToolbar` · `rtl`
 
 ```dart
 NovelReader(
   bookId: 'novel_1',
   source: NovelSource.epub('/path/to/book.epub'),
+  trialLimit: ReaderTrialLimit.chapters(3, startChapter: 0),
+  onTrialLimitReached: (event) { /* host UI */ },
   watermarkText: 'trial',
   enableInk: true,
   mediaOverlaySource: UrlSource('https://example.com/narration.mp3'),
@@ -212,7 +219,7 @@ Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev
 | Navigation | Swipe, tap zones, arrow / volume keys, top progress seek |
 | Brightness / wake | `ReaderSettings.brightness`, `keepScreenOn` |
 | Watermark | `watermarkText` |
-| Trial | `maxReadablePages` cap + overlay |
+| Trial | `trialLimit` caps readable pages + `onTrialLimitReached` (no built-in overlay) |
 | Progress | `persistProgress` stores `pageIndex` + `percentage` |
 | Callback | `onPageChanged` |
 | Tuning | `rasterDpi` (default 120) |
@@ -221,11 +228,53 @@ Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev
 PdfReader(
   bookId: 'doc_1',
   source: PdfSource.file('/path/to/doc.pdf'),
-  maxReadablePages: 5,
+  trialLimit: ReaderTrialLimit.pages(5, startPage: 0),
+  onTrialLimitReached: (event) { /* host UI */ },
   watermarkText: 'CONFIDENTIAL',
   rasterDpi: 120,
 );
 ```
+
+---
+
+## Trial (`ReaderTrialLimit`)
+
+All three readers use `trialLimit` for the preview window and `onTrialLimitReached` to report overflow attempts. **The package does not show trial-end UI** — dialogs, snackbars, and overlays are up to the host.
+
+### Configuration
+
+| Field | Meaning |
+|-------|---------|
+| `maxCount` | Readable pages (comic/PDF) or chapters (novel) |
+| `startIndex` | First readable page/chapter (0-based) |
+| `unit` | `ReaderTrialUnit.page` or `.chapter` |
+
+Factories:
+
+```dart
+ReaderTrialLimit.pages(3, startPage: 0);       // comic / PDF
+ReaderTrialLimit.chapters(3, startChapter: 0); // novel
+```
+
+### Callback `ReaderTrialLimitEvent`
+
+| Field | Meaning |
+|-------|---------|
+| `limit` | Active trial config |
+| `currentIndex` | Current page/chapter index |
+| `targetIndex` | Page/chapter the user tried to reach |
+| `totalCount` | Total pages/chapters |
+| `action` | `next` · `seek` · `chapterSelect` · `search` |
+
+### Behavior summary
+
+| Reader | Unit | Package behavior |
+|--------|------|------------------|
+| Comic | page | Truncates `PageView`; callbacks on page next/seek/thumb overflow |
+| Novel | chapter | Truncates body paragraphs; callbacks on chapter/search/paging overflow |
+| PDF | page | Truncates `PageView`; callbacks on page next/seek overflow |
+
+Legacy helpers: `trialPageCount` · `clampTrialPage` · `trialLimited` · `atTrialEnd`.
 
 ---
 
@@ -274,7 +323,8 @@ Notes:
 | `TapZoneDetector` / `TapZoneAction` | Prev / toolbar / next (RTL aware) |
 | `ReaderProgressBar` | Top progress bar |
 | `ReaderWatermark` | Watermark overlay |
-| `clampTrialPage` / `trialPageCount` | Trial helpers |
+| `ReaderTrialLimit` / `ReaderTrialLimitEvent` / `onTrialLimitReached` | Trial window + overflow callback |
+| `trialPageCount` / `clampTrialPage` / `trialLimited` / `atTrialEnd` | Trial helpers (wrap `ReaderTrialLimit.pages`) |
 | `InkAnnotationLayer` / `InkStroke` | Freehand ink, undo/clear, JSON |
 | `PageCurl` / `CurlPageView` / `PageTurnEffect` | Page-curl helpers (standalone) |
 | `MediaOverlayPlayer` / `AudiobookController` | Audio + karaoke |
@@ -286,7 +336,8 @@ Notes:
 | Item | Status |
 |------|--------|
 | `ComicReader.pageTurnEffect` | Declared; comic path still uses `ExtendedImageGesturePageView` — use `CurlPageView` yourself |
-| `NovelReader.maxReadablePages` | Exposed; not applied on novel body (comic / PDF do) |
+| Comic double-page | Horizontal only; enabling double-page auto-switches from vertical |
+| EPUB trial | Chapter-level blocking + callbacks; in-book paging may need host handling at deep jumps |
 | EPUB TTS | Text path speaks current paragraph; EPUB does not read body text |
 | Auto-scroll | Text path only |
 | Media overlay → EPUB | Karaoke jumps by paragraph, not CFI |
@@ -309,9 +360,11 @@ flutter run
 
 | Entry | Demo |
 |-------|------|
-| Comic | Remote images, watermark, 3-page trial, ink, `onSync` snackbar, bookmark export |
-| Novel (text) | Temp txt, themes / TTS, watermark, ink, JSON export, sync |
-| PDF | In-memory sample PDF, watermark, trial overlay |
+| Comic | Remote images, 3-page trial (default dialog feedback), ink, `onSync` snackbar, bookmark export |
+| Novel (text) | 12-chapter sample, 3-chapter trial, themes / TTS, JSON export, sync |
+| PDF | 5-page in-memory sample, 3-page trial, `onTrialLimitReached` demo |
+
+Example **Advanced settings** configure trial count, start page/chapter, and feedback style (dialog / SnackBar / none).
 
 ---
 
