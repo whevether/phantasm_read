@@ -371,3 +371,11 @@ Example **Advanced settings** configure trial count, start page/chapter, and fee
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_zh.md](CHANGELOG_zh.md).
+
+---
+
+<p align="center">
+  <img src="docs/pay.jpg" alt="Support the author" width="240"/>
+</p>
+
+<p align="center">If you find this project helpful, please consider supporting me.</p>

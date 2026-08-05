@@ -712,83 +712,101 @@ class _ComicToolbar extends StatelessWidget {
                             onSettingsChanged(settings.copyWith(brightness: v)),
                       ),
                     ),
-                    IconButton(
-                      tooltip: '方向',
-                      onPressed: () => onModeChanged(
-                        mode == ComicReadingMode.vertical
-                            ? ComicReadingMode.horizontal
-                            : ComicReadingMode.vertical,
-                      ),
-                      icon: Icon(
-                        mode == ComicReadingMode.vertical
-                            ? Icons.swap_vert
-                            : Icons.swap_horiz,
-                        color: Colors.white,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '适应',
-                      onPressed: () {
-                        final next = switch (settings.comicFitMode) {
-                          ComicFitMode.contain => ComicFitMode.width,
-                          ComicFitMode.width => ComicFitMode.height,
-                          ComicFitMode.height => ComicFitMode.contain,
-                        };
-                        onSettingsChanged(settings.copyWith(comicFitMode: next));
-                      },
-                      icon: const Icon(Icons.fit_screen, color: Colors.white),
-                    ),
-                    IconButton(
-                      tooltip: settings.doublePage
-                          ? '关闭双页'
-                          : mode == ComicReadingMode.vertical
-                              ? '双页（将切换为横向）'
-                              : '双页',
-                      onPressed: () => onSettingsChanged(
-                        settings.copyWith(doublePage: !settings.doublePage),
-                      ),
-                      icon: Icon(
-                        settings.doublePage
-                            ? Icons.menu_book
-                            : Icons.menu_book_outlined,
-                        color: settings.doublePage
-                            ? (mode == ComicReadingMode.horizontal
-                                ? Colors.amber
-                                : Colors.amber.withValues(alpha: 0.45))
-                            : Colors.white,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '书签',
-                      onPressed: onToggleBookmark,
-                      icon: Icon(
-                        bookmarked ? Icons.bookmark : Icons.bookmark_border,
-                        color: Colors.white,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '书签列表',
-                      onPressed: onShowBookmarks,
-                      icon: const Icon(Icons.bookmarks, color: Colors.white),
-                    ),
-                    IconButton(
-                      tooltip: '缩略图',
-                      onPressed: onShowThumbs,
-                      icon: const Icon(Icons.grid_view, color: Colors.white),
-                    ),
-                    IconButton(
-                      tooltip: '不熄屏',
-                      onPressed: () => onSettingsChanged(
-                        settings.copyWith(keepScreenOn: !settings.keepScreenOn),
-                      ),
-                      icon: Icon(
-                        settings.keepScreenOn
-                            ? Icons.phonelink_lock
-                            : Icons.phonelink_erase,
-                        color: Colors.white,
-                      ),
-                    ),
                   ],
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: '方向',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onModeChanged(
+                          mode == ComicReadingMode.vertical
+                              ? ComicReadingMode.horizontal
+                              : ComicReadingMode.vertical,
+                        ),
+                        icon: Icon(
+                          mode == ComicReadingMode.vertical
+                              ? Icons.swap_vert
+                              : Icons.swap_horiz,
+                          color: Colors.white,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '适应',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          final next = switch (settings.comicFitMode) {
+                            ComicFitMode.contain => ComicFitMode.width,
+                            ComicFitMode.width => ComicFitMode.height,
+                            ComicFitMode.height => ComicFitMode.contain,
+                          };
+                          onSettingsChanged(
+                            settings.copyWith(comicFitMode: next),
+                          );
+                        },
+                        icon: const Icon(Icons.fit_screen, color: Colors.white),
+                      ),
+                      IconButton(
+                        tooltip: settings.doublePage
+                            ? '关闭双页'
+                            : mode == ComicReadingMode.vertical
+                                ? '双页（将切换为横向）'
+                                : '双页',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onSettingsChanged(
+                          settings.copyWith(doublePage: !settings.doublePage),
+                        ),
+                        icon: Icon(
+                          settings.doublePage
+                              ? Icons.menu_book
+                              : Icons.menu_book_outlined,
+                          color: settings.doublePage
+                              ? (mode == ComicReadingMode.horizontal
+                                  ? Colors.amber
+                                  : Colors.amber.withValues(alpha: 0.45))
+                              : Colors.white,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '书签',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onToggleBookmark,
+                        icon: Icon(
+                          bookmarked ? Icons.bookmark : Icons.bookmark_border,
+                          color: Colors.white,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '书签列表',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onShowBookmarks,
+                        icon: const Icon(Icons.bookmarks, color: Colors.white),
+                      ),
+                      IconButton(
+                        tooltip: '缩略图',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onShowThumbs,
+                        icon: const Icon(Icons.grid_view, color: Colors.white),
+                      ),
+                      IconButton(
+                        tooltip: '不熄屏',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onSettingsChanged(
+                          settings.copyWith(
+                            keepScreenOn: !settings.keepScreenOn,
+                          ),
+                        ),
+                        icon: Icon(
+                          settings.keepScreenOn
+                              ? Icons.phonelink_lock
+                              : Icons.phonelink_erase,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 Row(
                   children: [

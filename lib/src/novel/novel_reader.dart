@@ -927,44 +927,60 @@ class _NovelToolbar extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    IconButton(
-                      onPressed: onPrevChapter,
-                      icon: const Icon(Icons.skip_previous, color: Colors.white),
-                    ),
-                    IconButton(
-                      onPressed: onPrevPage,
-                      icon: const Icon(Icons.chevron_left, color: Colors.white),
-                    ),
-                    IconButton(
-                      onPressed: onNextPage,
-                      icon: const Icon(Icons.chevron_right, color: Colors.white),
-                    ),
-                    IconButton(
-                      onPressed: onNextChapter,
-                      icon: const Icon(Icons.skip_next, color: Colors.white),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      onPressed: onSearch,
-                      icon: const Icon(Icons.search, color: Colors.white),
-                    ),
-                    if (hasChapters)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
                       IconButton(
-                        onPressed: onSelectChapter,
-                        icon: const Icon(Icons.list_alt, color: Colors.white),
+                        onPressed: onPrevChapter,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(
+                          Icons.skip_previous,
+                          color: Colors.white,
+                        ),
                       ),
-                    IconButton(
-                      onPressed: onBookmark,
-                      icon: const Icon(Icons.bookmark_border, color: Colors.white),
-                    ),
-                    if (enableHighlights)
                       IconButton(
-                        onPressed: onHighlight,
-                        icon: const Icon(Icons.highlight, color: Colors.white),
+                        onPressed: onPrevPage,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.chevron_left, color: Colors.white),
                       ),
-                  ],
+                      IconButton(
+                        onPressed: onNextPage,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.chevron_right, color: Colors.white),
+                      ),
+                      IconButton(
+                        onPressed: onNextChapter,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.skip_next, color: Colors.white),
+                      ),
+                      IconButton(
+                        onPressed: onSearch,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.search, color: Colors.white),
+                      ),
+                      if (hasChapters)
+                        IconButton(
+                          onPressed: onSelectChapter,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.list_alt, color: Colors.white),
+                        ),
+                      IconButton(
+                        onPressed: onBookmark,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(
+                          Icons.bookmark_border,
+                          color: Colors.white,
+                        ),
+                      ),
+                      if (enableHighlights)
+                        IconButton(
+                          onPressed: onHighlight,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.highlight, color: Colors.white),
+                        ),
+                    ],
+                  ),
                 ),
                 Row(
                   children: [
@@ -976,62 +992,78 @@ class _NovelToolbar extends StatelessWidget {
                             onSettingsChanged(settings.copyWith(brightness: v)),
                       ),
                     ),
-                    IconButton(
-                      tooltip: '方向',
-                      onPressed: () => onSettingsChanged(
-                        settings.copyWith(
-                          novelReadingMode: mode == NovelReadingMode.vertical
-                              ? NovelReadingMode.horizontal
-                              : NovelReadingMode.vertical,
+                  ],
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: '方向',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onSettingsChanged(
+                          settings.copyWith(
+                            novelReadingMode:
+                                mode == NovelReadingMode.vertical
+                                    ? NovelReadingMode.horizontal
+                                    : NovelReadingMode.vertical,
+                          ),
+                        ),
+                        icon: Icon(
+                          mode == NovelReadingMode.vertical
+                              ? Icons.swap_vert
+                              : Icons.swap_horiz,
+                          color: Colors.white,
                         ),
                       ),
-                      icon: Icon(
-                        mode == NovelReadingMode.vertical
-                            ? Icons.swap_vert
-                            : Icons.swap_horiz,
-                        color: Colors.white,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '自动滚屏',
-                      onPressed: onAutoScroll,
-                      icon: Icon(
-                        Icons.vertical_align_bottom,
-                        color: autoScroll ? Colors.amber : Colors.white,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '朗读',
-                      onPressed: onTts,
-                      icon: Icon(
-                        Icons.record_voice_over,
-                        color: ttsOn ? Colors.amber : Colors.white,
-                      ),
-                    ),
-                    if (onOverlayPlay != null)
                       IconButton(
-                        tooltip: '有声播放',
-                        onPressed: onOverlayPlay,
-                        icon: const Icon(Icons.play_arrow, color: Colors.white),
+                        tooltip: '自动滚屏',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onAutoScroll,
+                        icon: Icon(
+                          Icons.vertical_align_bottom,
+                          color: autoScroll ? Colors.amber : Colors.white,
+                        ),
                       ),
-                    if (onOverlayPause != null)
                       IconButton(
-                        tooltip: '有声暂停',
-                        onPressed: onOverlayPause,
-                        icon: const Icon(Icons.pause, color: Colors.white),
+                        tooltip: '朗读',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: onTts,
+                        icon: Icon(
+                          Icons.record_voice_over,
+                          color: ttsOn ? Colors.amber : Colors.white,
+                        ),
                       ),
-                    IconButton(
-                      onPressed: () => onSettingsChanged(
-                        settings.copyWith(keepScreenOn: !settings.keepScreenOn),
+                      if (onOverlayPlay != null)
+                        IconButton(
+                          tooltip: '有声播放',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: onOverlayPlay,
+                          icon: const Icon(Icons.play_arrow, color: Colors.white),
+                        ),
+                      if (onOverlayPause != null)
+                        IconButton(
+                          tooltip: '有声暂停',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: onOverlayPause,
+                          icon: const Icon(Icons.pause, color: Colors.white),
+                        ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onSettingsChanged(
+                          settings.copyWith(
+                            keepScreenOn: !settings.keepScreenOn,
+                          ),
+                        ),
+                        icon: Icon(
+                          settings.keepScreenOn
+                              ? Icons.phonelink_lock
+                              : Icons.phonelink_erase,
+                          color: Colors.white,
+                        ),
                       ),
-                      icon: Icon(
-                        settings.keepScreenOn
-                            ? Icons.phonelink_lock
-                            : Icons.phonelink_erase,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 Row(
                   children: [

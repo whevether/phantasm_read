@@ -371,3 +371,11 @@ flutter run
 ## 修改日志
 
 见 [CHANGELOG_zh.md](CHANGELOG_zh.md) / [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
+<p align="center">
+  <img src="docs/pay.jpg" alt="支持作者" width="240"/>
+</p>
+
+<p align="center">如果觉得这个项目对你有帮助，欢迎支持我。</p>
