@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>EPUB Reader</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+    #viewer { width: 100%; height: 100%; }
+    #viewer .epub-container { width: 100% !important; height: 100% !important; }
+  </style>
+  <script src="jszip.min.js"></script>
+  <script src="epub.min.js"></script>
+</head>
+<body>
+  <div id="viewer"></div>
+  <script>
+    let book = null;
+    let rendition = null;
+
+    function post(type, payload) {
+      try {
+        if (window.EpubChannel && window.EpubChannel.postMessage) {
+          window.EpubChannel.postMessage(JSON.stringify({ type: type, payload: payload || null }));
+        }
+      } catch (e) {}
+    }
+
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    async function ensureRendition() {
+      if (!book) throw new Error('book not opened');
+      if (!rendition) {
+        rendition = book.renderTo('viewer', {
+          width: '100%',
+          height: '100%',
+          flow: 'paginated',
+          allowScriptedContent: true
+        });
+        rendition.on('relocated', function (location) {
+          const cfi = location && location.start ? location.start.cfi : null;
+          const percentage = (location && location.start && location.start.percentage != null)
+            ? location.start.percentage
+            : (book.locations && book.locations.percentageFromCfi
+                ? book.locations.percentageFromCfi(cfi)
+                : null);
+          post('locationChanged', { cfi: cfi, percentage: percentage });
+        });
+      }
+      return rendition;
+    }
+
+    window.epubBridge = {
+      async openFromBase64(base64) {
+        try {
+          if (book) { try { book.destroy(); } catch (e) {} }
+          book = ePub(base64ToArrayBuffer(base64));
+          await ensureRendition();
+          await rendition.display();
+          post('ready', { ok: true });
+          return true;
+        } catch (e) {
+          post('error', { message: String(e && e.message ? e.message : e) });
+          throw e;
+        }
+      },
+      async next() {
+        if (!rendition) return;
+        await rendition.next();
+      },
+      async prev() {
+        if (!rendition) return;
+        await rendition.prev();
+      },
+      async display(target) {
+        if (!rendition) return;
+        await rendition.display(target || undefined);
+      },
+      async getToc() {
+        if (!book) return [];
+        const nav = await book.loaded.navigation;
+        return (nav && nav.toc) ? nav.toc : [];
+      },
+      async getLocation() {
+        if (!rendition) return null;
+        const loc = rendition.currentLocation();
+        if (!loc || !loc.start) return null;
+        return { cfi: loc.start.cfi, percentage: loc.start.percentage };
+      },
+      setFontSize(percent) {
+        if (!rendition) return;
+        rendition.themes.fontSize(String(percent) + '%');
+      },
+      setFontFamily(family) {
+        if (!rendition || !family) return;
+        rendition.themes.font(family);
+      },
+      setLineHeight(value) {
+        if (!rendition) return;
+        rendition.themes.default({ body: { 'line-height': String(value) } });
+      },
+      setTheme(bg, fg) {
+        if (!rendition) return;
+        rendition.themes.default({
+          body: { background: bg || '#ffffff', color: fg || '#000000' }
+        });
+      }
+    };
+
+    post('shellReady', {});
+  </script>
+</body>
+</html>

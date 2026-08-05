@@ -1,0 +1,26 @@
+name: phantasm_read
+description: Cross-platform Flutter comic and novel reader package.
+version: 0.1.0
+homepage: https://github.com/phantasm/phantasm_read
+
+environment:
+  sdk: ^3.12.2
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  extended_image: 10.1.0
+  webview_flutter: 4.14.1
+  screen_brightness: ^2.1.1
+  wakelock_plus: ^1.2.8
+  charset_converter: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  assets:
+    - assets/epubjs/

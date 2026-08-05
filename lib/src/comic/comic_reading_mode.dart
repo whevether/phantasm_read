@@ -1,0 +1,4 @@
+enum ComicReadingMode {
+  vertical,
+  horizontal,
+}
