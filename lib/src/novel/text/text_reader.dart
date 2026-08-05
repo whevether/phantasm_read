@@ -54,6 +54,7 @@ class TextReaderState extends State<TextReader> {
   List<String> _paragraphs = [];
   List<List<String>> _pages = [];
   int _currentParagraph = 0;
+  Size? _layoutSize;
   bool _pagesReady = false;
 
   List<String> get paragraphs => _paragraphs;
@@ -91,6 +92,7 @@ class TextReaderState extends State<TextReader> {
     if (oldWidget.typography != widget.typography ||
         oldWidget.readingMode != widget.readingMode) {
       _pagesReady = false;
+      _layoutSize = null;
     }
   }
 
@@ -127,12 +129,9 @@ class TextReaderState extends State<TextReader> {
     return out;
   }
 
-  void _rebuildPages(BuildContext context) {
-    if (widget.readingMode != NovelReadingMode.horizontal) {
-      _pagesReady = true;
-      return;
-    }
-    final size = MediaQuery.sizeOf(context);
+  void _ensureHorizontalPages(Size size) {
+    if (_pagesReady && _layoutSize == size) return;
+    _layoutSize = size;
     final style = _textStyle(
       widget.foregroundColor ?? const Color(0xFF222222),
     );
@@ -143,6 +142,9 @@ class TextReaderState extends State<TextReader> {
       style: style,
       padding: EdgeInsets.all(margin),
     );
+    if (_pages.isEmpty && _paragraphs.isNotEmpty) {
+      _pages = [_paragraphs];
+    }
     final pageIndex = _pageIndexForParagraph(_currentParagraph);
     _pageController?.dispose();
     _pageController = PageController(initialPage: pageIndex);
@@ -271,35 +273,43 @@ class TextReaderState extends State<TextReader> {
           _paragraphs = book.paragraphs;
 
           if (widget.readingMode == NovelReadingMode.horizontal) {
-            if (!_pagesReady) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) setState(() => _rebuildPages(context));
-              });
-              return const Center(child: CircularProgressIndicator());
-            }
-            return PageView.builder(
-              controller: _pageController,
-              reverse: widget.rtl,
-              itemCount: _pages.length,
-              onPageChanged: (page) {
-                final p = _paragraphForPage(page);
-                _currentParagraph = p;
-                widget.onParagraphChanged?.call(p);
-              },
-              itemBuilder: (context, index) {
-                return Padding(
-                  padding: EdgeInsets.all(margin),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final para in _pages[index]) ...[
-                          Text(para, style: style, textAlign: _align),
-                          SizedBox(height: widget.typography.fontSize * 0.8),
-                        ],
-                      ],
-                    ),
-                  ),
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final size = Size(constraints.maxWidth, constraints.maxHeight);
+                if (size.width <= 0 || size.height <= 0) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                _ensureHorizontalPages(size);
+                if (!_pagesReady || _pages.isEmpty) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                return PageView.builder(
+                  controller: _pageController,
+                  reverse: widget.rtl,
+                  itemCount: _pages.length,
+                  onPageChanged: (page) {
+                    final p = _paragraphForPage(page);
+                    _currentParagraph = p;
+                    widget.onParagraphChanged?.call(p);
+                  },
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: EdgeInsets.all(margin),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final para in _pages[index]) ...[
+                              Text(para, style: style, textAlign: _align),
+                              SizedBox(
+                                height: widget.typography.fontSize * 0.8,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             );

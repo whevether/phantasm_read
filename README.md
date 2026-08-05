@@ -52,7 +52,7 @@ PdfReader(
 |------|---------|
 | Comic | Multi-source / CBZ, vertical & horizontal, RTL, zoom, double-page, fit, thumbs, bookmarks, trial, watermark, ink, sync hook |
 | Novel | EPUB + txt/md/html, search, nested TOC, themes, TTS, media overlay, bookmarks/highlights, watermark, ink |
-| PDF | WebView PDF, watermark, trial overlay, brightness / keep-awake, progress persistence |
+| PDF | `pdf` 3.13.0 + `printing` raster, paging, zoom, watermark, trial, progress |
 | Shared | Settings / progress / bookmark stores, brightness, wakelock, tap zones, progress bar, JSON export, `onSync` |
 
 ---
@@ -200,20 +200,21 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF (`PdfReader`)
 
-Loads PDF via WebView `data:application/pdf;base64,…` (**no** native pdfium).
+Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium).
 
 ### Implemented
 
 | Feature | Notes |
 |---------|-------|
 | Sources | `PdfSource.file` / `PdfSource.bytes` |
-| Render | WebView `<embed>` |
+| Render | `Printing.raster` per-page bitmap; `InteractiveViewer` pinch zoom |
+| Navigation | Swipe, tap zones, arrow / volume keys, top progress seek |
 | Brightness / wake | `ReaderSettings.brightness`, `keepScreenOn` |
 | Watermark | `watermarkText` |
-| Trial | `maxReadablePages` full-screen “trial ended” overlay |
-| Progress | `persistProgress` stores `pageIndex` |
-| Chrome | Simple status + top progress bar (trial-based estimate) |
-| Callback | `onPageChanged` (host-driven at init) |
+| Trial | `maxReadablePages` cap + overlay |
+| Progress | `persistProgress` stores `pageIndex` + `percentage` |
+| Callback | `onPageChanged` |
+| Tuning | `rasterDpi` (default 120) |
 
 ```dart
 PdfReader(
@@ -221,8 +222,25 @@ PdfReader(
   source: PdfSource.file('/path/to/doc.pdf'),
   maxReadablePages: 5,
   watermarkText: 'CONFIDENTIAL',
+  rasterDpi: 120,
 );
 ```
+
+---
+
+## Platform support
+
+| Platform | Comic | Novel (text) | Novel (EPUB) | PDF |
+|----------|-------|--------------|--------------|-----|
+| Android / iOS | ✓ | ✓ | ✓ | ✓ |
+| Linux / Windows / macOS | ✓ | ✓ | ✓ (`webview_flutter`) | ✓ (`printing` / pdfium) |
+| Web | ✓ (URL images) | ✓ (asset / url / bytes) | WebView + assets required | pdf.js required |
+
+Notes:
+
+- **Linux / Windows**: local `file` paths work; EPUB uses WebView; PDF does not rely on system WebView PDF embed.
+- Desktop **TTS / system brightness** may be limited (brightness falls back to overlay).
+- On web, `NovelSource.*(path)` / `ComicPages.fromFiles` throw `UnsupportedError` — use asset / url / bytes.
 
 ---
 
@@ -273,7 +291,7 @@ PdfReader(
 | Media overlay → EPUB | Karaoke jumps by paragraph, not CFI |
 | Novel bookmark/highlight list UI | Persist yes; no list sheet (comic has bookmark list) |
 | Ink | Drawable via `enableInk`; no toolbar undo/clear; not persisted by default |
-| PDF page nav | Depends on system WebView PDF; no reliable page sync; `percentage` always 0 |
+| Large PDFs | Page rasterization; high page count / `rasterDpi` increases memory and load time |
 | Markdown / HTML URL | No `*Url` factories (file / asset only) |
 | Local file paths | May `UnsupportedError` on web — prefer asset / url / bytes |
 | `onSync` | Host hook only; no cloud upload inside the package |

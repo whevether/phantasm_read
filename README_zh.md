@@ -52,7 +52,7 @@ PdfReader(
 |------|----------|
 | 漫画 | 多图源 / CBZ、竖横滑、RTL、缩放、双页、适应、缩略图、书签、试读、水印、手绘、同步回调 |
 | 小说 | EPUB + txt/md/html、搜索、嵌套目录、主题排版、TTS、Media Overlay、书签划线、水印、手绘 |
-| PDF | WebView 打开 PDF、水印、试读遮罩、亮度 / 常亮、进度持久化 |
+| PDF | `pdf` 3.13.0 + `printing` 光栅化、翻页、缩放、水印、试读、进度 |
 | 共用 | 设置 / 进度 / 书签持久化、亮度、不息屏、点击分区、进度条、导出 JSON、`onSync` |
 
 ---
@@ -202,20 +202,21 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF（`PdfReader`）
 
-通过 WebView 加载 `data:application/pdf;base64,…`（**不依赖**原生 pdfium）。
+基于 **`pdf` 3.13.0** + **`printing` 5.15.0**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。
 
 ### 已实现
 
 | 能力 | 说明 |
 |------|------|
 | 数据源 | `PdfSource.file` / `PdfSource.bytes` |
-| 显示 | WebView `<embed>` 打开 PDF |
+| 渲染 | `Printing.raster` 逐页位图；`InteractiveViewer`  pinch 缩放 |
+| 导航 | 滑动翻页、点击分区、方向键 / 音量键、顶栏进度条拖拽 |
 | 亮度 / 常亮 | `ReaderSettings.brightness`、`keepScreenOn` |
 | 水印 | `watermarkText` |
-| 试读 | `maxReadablePages` 达上限后全屏「试读结束」遮罩 |
-| 进度 | `persistProgress` 保存 `pageIndex` |
-| 工具栏 | 简易状态栏 + 顶栏进度条（按试读页数估算） |
-| 回调 | `onPageChanged`（初始化时由宿主侧触发） |
+| 试读 | `maxReadablePages` 限制可读页 + 遮罩 |
+| 进度 | `persistProgress` 保存 `pageIndex` 与 `percentage` |
+| 回调 | `onPageChanged` |
+| 参数 | `rasterDpi`（默认 120，可调清晰度 / 性能） |
 
 ```dart
 PdfReader(
@@ -223,10 +224,26 @@ PdfReader(
   source: PdfSource.file('/path/to/doc.pdf'),
   maxReadablePages: 5,
   watermarkText: 'CONFIDENTIAL',
+  rasterDpi: 120,
 );
 ```
 
 ---
+
+## 平台支持
+
+| 平台 | 漫画 | 小说（文本） | 小说（EPUB） | PDF |
+|------|------|-------------|-------------|-----|
+| Android / iOS | ✓ | ✓ | ✓ | ✓ |
+| Linux / Windows / macOS | ✓ | ✓ | ✓（`webview_flutter`） | ✓（`printing` / pdfium） |
+| Web | ✓（URL 图源） | ✓（asset / url / bytes） | 需 WebView + 资源加载 | 需配置 pdf.js |
+
+说明：
+
+- **Linux / Windows**：本地 `file` 路径可用；EPUB 走 WebView；PDF 不依赖系统 WebView 内嵌 PDF。
+- 桌面端 **TTS / 系统亮度** 可能降级或不可用（亮度会回退遮罩层）。
+- Web 上 `NovelSource.*(path)` / `ComicPages.fromFiles` 会 `UnsupportedError`，请用 asset / url / bytes。
+
 
 ## 共用能力
 
@@ -275,7 +292,7 @@ PdfReader(
 | Media Overlay → EPUB | karaoke 按段落跳转，不跟 CFI |
 | 小说书签 / 高亮列表 UI | 可增删入库；无独立列表页（漫画有书签列表） |
 | 墨迹批注 | `enableInk` 可画；工具栏无撤销/清空入口；默认不持久化 |
-| PDF 页导航 | 依赖系统 WebView PDF；无可靠翻页 / 页码同步；`percentage` 恒为 0 |
+| PDF 大文件 | 逐页光栅化，页数多 / `rasterDpi` 高时内存与耗时增加 |
 | Markdown / HTML URL | 无 `*Url` 工厂（仅 file / asset） |
 | 本地文件路径 | Web 等平台上 file 源可能 `UnsupportedError`，请用 asset / url / bytes |
 | `onSync` | 仅为宿主钩子，包内不实现云上传 |

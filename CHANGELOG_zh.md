@@ -1,6 +1,5 @@
 ## 0.0.1
-
-首个版本（尚未发布）。完整功能清单见 [README_zh.md](README_zh.md)。
+完整功能清单见 [README_zh.md](README_zh.md)。
 
 ### 漫画
 
@@ -18,7 +17,7 @@
 
 ### PDF
 
-* `PdfReader`：`PdfSource.file` / `bytes`；WebView data URL；水印、试读遮罩、亮度 / 常亮、进度持久化
+* `PdfReader`：`PdfSource.file` / `bytes`；`pdf` 3.13.0 + `printing` 光栅化；Linux / Windows 可用
 
 ### 共用
 

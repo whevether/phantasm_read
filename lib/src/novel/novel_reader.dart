@@ -39,6 +39,7 @@ class NovelReader extends StatefulWidget {
     this.maxReadablePages,
     this.watermarkText,
     this.enableInk = false,
+    this.enableHighlights = true,
     this.mediaOverlayCues = const [],
     this.mediaOverlaySource,
     this.onSettingsChanged,
@@ -62,6 +63,7 @@ class NovelReader extends StatefulWidget {
   final int? maxReadablePages;
   final String? watermarkText;
   final bool enableInk;
+  final bool enableHighlights;
   final List<MediaOverlayCue> mediaOverlayCues;
   final Source? mediaOverlaySource;
   final ValueChanged<ReaderSettings>? onSettingsChanged;
@@ -124,35 +126,39 @@ class _NovelReaderState extends State<NovelReader>
   }
 
   Future<void> _bootstrap() async {
-    if (widget.persistSettings) {
-      final saved = await ReaderSettingsStore.instance.load();
-      if (saved != null) _settings = saved;
-    }
-    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-    _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
-    if (_settings.immersive) await ReaderImmersive.enter();
-    await _enterReading();
     try {
+      if (widget.persistSettings) {
+        final saved = await ReaderSettingsStore.instance.load();
+        if (saved != null) _settings = saved;
+      }
       _bytes = await widget.source.bytes.load();
-      final progress = widget.persistProgress
-          ? await ReaderProgressStore.instance.load(_bookId)
-          : null;
-      if (progress != null) {
-        _cfi = progress.cfi ?? widget.initialCfi;
-        _paragraphIndex = progress.paragraphIndex ?? 0;
-        _jumpToParagraph = progress.paragraphIndex;
+      _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+      _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+      if (widget.persistProgress) {
+        final progress = await ReaderProgressStore.instance.load(_bookId);
+        if (progress != null) {
+          _cfi = progress.cfi ?? widget.initialCfi;
+          _paragraphIndex = progress.paragraphIndex ?? 0;
+          _jumpToParagraph = progress.paragraphIndex;
+        } else {
+          _cfi = widget.initialCfi;
+        }
       } else {
         _cfi = widget.initialCfi;
       }
     } catch (e) {
       _loadError = e;
     }
+
+    if (mounted) setState(() => _loading = false);
+
+    if (_settings.immersive) await ReaderImmersive.enter();
+    await _enterReading();
     _sessionStarted = DateTime.now();
     _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       final s = _sessionStarted;
       if (s != null) widget.onSessionTick?.call(DateTime.now().difference(s));
     });
-    if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _enterReading() async {
@@ -435,6 +441,7 @@ class _NovelReaderState extends State<NovelReader>
   }
 
   Future<void> _addHighlight() async {
+    if (!widget.enableHighlights) return;
     final paras = _textKey.currentState?.paragraphs;
     final excerpt = _isEpub
         ? (_cfi ?? '')
@@ -526,9 +533,17 @@ class _NovelReaderState extends State<NovelReader>
   }
 
   Widget _buildContent() {
+    if (_loadError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('Load failed: $_loadError', textAlign: TextAlign.center),
+        ),
+      );
+    }
     final bytes = _bytes;
     if (bytes == null) {
-      return Center(child: Text('Load failed: $_loadError'));
+      return const Center(child: Text('No content'));
     }
     final bg = _settings.backgroundColor == null
         ? null
@@ -671,6 +686,7 @@ class _NovelReaderState extends State<NovelReader>
                   onNextPage: () => _page(1),
                   onBookmark: _toggleBookmark,
                   onHighlight: _addHighlight,
+                  enableHighlights: widget.enableHighlights,
                   onAutoScroll: _toggleAutoScroll,
                   onTts: _toggleTts,
                   onOverlayPlay: _overlay == null
@@ -740,6 +756,7 @@ class _NovelToolbar extends StatelessWidget {
     required this.onNextPage,
     required this.onBookmark,
     required this.onHighlight,
+    required this.enableHighlights,
     required this.onAutoScroll,
     required this.onTts,
     this.onOverlayPlay,
@@ -759,6 +776,7 @@ class _NovelToolbar extends StatelessWidget {
   final VoidCallback onNextPage;
   final VoidCallback onBookmark;
   final VoidCallback onHighlight;
+  final bool enableHighlights;
   final VoidCallback onAutoScroll;
   final VoidCallback onTts;
   final VoidCallback? onOverlayPlay;
@@ -813,10 +831,11 @@ class _NovelToolbar extends StatelessWidget {
                       onPressed: onBookmark,
                       icon: const Icon(Icons.bookmark_border, color: Colors.white),
                     ),
-                    IconButton(
-                      onPressed: onHighlight,
-                      icon: const Icon(Icons.highlight, color: Colors.white),
-                    ),
+                    if (enableHighlights)
+                      IconButton(
+                        onPressed: onHighlight,
+                        icon: const Icon(Icons.highlight, color: Colors.white),
+                      ),
                   ],
                 ),
                 Row(

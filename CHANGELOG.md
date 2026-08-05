@@ -1,6 +1,5 @@
 ## 0.0.1
-
-Initial release (unpublished). Full feature list: [README.md](README.md).
+Full feature list: [README.md](README.md).
 
 ### Comic
 
@@ -18,7 +17,7 @@ Initial release (unpublished). Full feature list: [README.md](README.md).
 
 ### PDF
 
-* `PdfReader`: `PdfSource.file` / `bytes`; WebView data URL; watermark, trial overlay, brightness / wakelock, progress
+* `PdfReader`: `PdfSource.file` / `bytes`; `pdf` 3.13.0 + `printing` raster; Linux / Windows supported
 
 ### Shared
 
