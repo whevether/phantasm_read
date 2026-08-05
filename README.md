@@ -313,6 +313,7 @@ Notes:
 
 - **Linux / Windows**: local `file` paths work; EPUB uses WebView; PDF does not rely on system WebView PDF embed.
 - Desktop **TTS / system brightness** may be limited (brightness falls back to overlay).
+- **macOS sandbox**: `ComicPages.fromUrls` requires `com.apple.security.network.client` in host entitlements for outbound HTTP/HTTPS; the example app includes this.
 - On web, `NovelSource.*(path)` / `ComicPages.fromFiles` throw `UnsupportedError` — use asset / url / bytes.
 
 ---

@@ -314,6 +314,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 
 - **Linux / Windows**：本地 `file` 路径可用；EPUB 走 WebView；PDF 不依赖系统 WebView 内嵌 PDF。
 - 桌面端 **TTS / 系统亮度** 可能降级或不可用（亮度会回退遮罩层）。
+- **macOS 沙盒**：使用 `ComicPages.fromUrls` 加载网络漫画时，宿主 App 需在 entitlements 中启用 `com.apple.security.network.client`（出站 HTTP/HTTPS）；示例工程已配置。
 - Web 上 `NovelSource.*(path)` / `ComicPages.fromFiles` 会 `UnsupportedError`，请用 asset / url / bytes。
 
 

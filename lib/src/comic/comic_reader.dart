@@ -18,6 +18,7 @@ import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
+import 'comic_network_cache.dart';
 import 'comic_pages.dart';
 import 'comic_reading_mode.dart';
 
@@ -196,6 +197,9 @@ class _ComicReaderState extends State<ComicReader>
       }
     }
     _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+    if (widget.pages is ComicPagesUrls) {
+      await ensureComicNetworkImageCache();
+    }
     _pageController = ExtendedPageController(initialPage: _currentPage);
     if (_settings.immersive) await ReaderImmersive.enter();
     await _enterReading();
@@ -433,9 +437,20 @@ class _ComicReaderState extends State<ComicReader>
             return const Center(child: CircularProgressIndicator());
           case LoadState.failed:
             return Center(
-              child: IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: state.reLoadImage,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.broken_image_outlined, color: Colors.white54),
+                  const SizedBox(height: 8),
+                  Text(
+                    '图片加载失败',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: state.reLoadImage,
+                  ),
+                ],
               ),
             );
           case LoadState.completed:
