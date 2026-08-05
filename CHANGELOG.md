@@ -14,7 +14,7 @@ Full feature list: [README.md](README.md).
 * Encoding UTF-8 / GBK / GB18030; chapter tree, search, bookmarks, highlights
 * Typography, fonts, theme presets; vertical / horizontal (default horizontal)
 * Trial by chapter: `ReaderTrialLimit.chapters` + `onTrialLimitReached`; body truncation + overflow callbacks
-* TTS (text), auto-scroll (text), media overlay / karaoke, watermark, ink, `onSync`
+* TTS: optional `NovelTtsEngine` injection (host wires `flutter_tts`, etc.); auto-scroll (text), media overlay / karaoke, watermark, ink, `onSync`
 
 ### PDF
 

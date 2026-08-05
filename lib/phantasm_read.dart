@@ -2,6 +2,7 @@
 library;
 
 export 'src/audio/media_overlay.dart';
+export 'src/audio/novel_tts.dart';
 export 'src/comic/comic_archive.dart';
 export 'src/comic/comic_pages.dart';
 export 'src/comic/comic_reader.dart';

@@ -14,7 +14,7 @@
 * 编码 UTF-8 / GBK / GB18030；章节树、搜索、书签、划线
 * 字号 / 行距 / 边距 / 字距 / 对齐 / 字体 / 主题预设；竖读 / 横读（默认横向）
 * 试读按章：`ReaderTrialLimit.chapters` + `onTrialLimitReached`；正文截断与越界回调
-* TTS（文本）、自动滚屏（文本）、Media Overlay / 卡拉 OK、水印、手绘、`onSync`
+* TTS：`NovelTtsEngine` 可选注入（宿主接入 `flutter_tts` 等）；自动滚屏（文本）、Media Overlay / 卡拉 OK、水印、手绘、`onSync`
 
 ### PDF
 

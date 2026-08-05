@@ -174,13 +174,36 @@ ComicReader(
 
 | 能力 | 说明 |
 |------|------|
-| `FlutterTts` | 朗读**当前文本段落**（工具栏开关） |
+| `NovelTtsEngine` | 可选注入；朗读**当前文本段落**（工具栏开关）。移动端可在宿主 App 中接入 `flutter_tts` 等实现；未注入时不显示朗读按钮，macOS 桌面构建无需该原生插件 |
 | `MediaOverlayCue` + `MediaOverlayPlayer` | 按时间轴高亮段落并跳转；`mediaOverlaySource` + `mediaOverlayCues`；`onKaraokeCue` |
 | `AudiobookController` | 独立有声辅助（`playFile` / `playUrl`），未绑进阅读器工具栏 |
 
+```dart
+// 宿主 App：pubspec 添加 flutter_tts，并实现 NovelTtsEngine
+class FlutterTtsEngine implements NovelTtsEngine {
+  FlutterTtsEngine() : _tts = FlutterTts();
+  final FlutterTts _tts;
+  @override
+  Future<void> speak(String text) => _tts.speak(text);
+  @override
+  Future<void> stop() => _tts.stop();
+  @override
+  void setCompletionHandler(VoidCallback? handler) {
+    _tts.setCompletionHandler(handler);
+  }
+  @override
+  void dispose() {}
+}
+
+NovelReader(
+  ttsEngine: FlutterTtsEngine(),
+  // ...
+);
+```
+
 ### 主要构造参数
 
-`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · `onSettingsChanged` · `onLocationChanged` · `onChaptersLoaded` · `onChapterChanged` · `onSessionTick` · `onSync` · `onKaraokeCue` · `showToolbar` · `rtl`
+`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · `ttsEngine` · `onSettingsChanged` · `onLocationChanged` · `onChaptersLoaded` · `onChapterChanged` · `onSessionTick` · `onSync` · `onKaraokeCue` · `showToolbar` · `rtl`
 
 ```dart
 NovelReader(

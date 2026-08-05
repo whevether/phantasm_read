@@ -174,13 +174,36 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 
 | API | Role |
 |-----|------|
-| `FlutterTts` | Speaks **current text paragraph** |
+| `NovelTtsEngine` | Optional injection; speaks **current text paragraph** (toolbar toggle). Wire `flutter_tts` (or similar) in the host app on mobile; toolbar button hidden when omitted — macOS/desktop builds avoid the native plugin |
 | `MediaOverlayCue` + `MediaOverlayPlayer` | Timed karaoke cues; `mediaOverlaySource` + `mediaOverlayCues`; `onKaraokeCue` |
 | `AudiobookController` | Standalone `playFile` / `playUrl` (not wired into reader toolbar) |
 
+```dart
+// Host app: add flutter_tts to pubspec and implement NovelTtsEngine
+class FlutterTtsEngine implements NovelTtsEngine {
+  FlutterTtsEngine() : _tts = FlutterTts();
+  final FlutterTts _tts;
+  @override
+  Future<void> speak(String text) => _tts.speak(text);
+  @override
+  Future<void> stop() => _tts.stop();
+  @override
+  void setCompletionHandler(VoidCallback? handler) {
+    _tts.setCompletionHandler(handler);
+  }
+  @override
+  void dispose() {}
+}
+
+NovelReader(
+  ttsEngine: FlutterTtsEngine(),
+  // ...
+);
+```
+
 ### Constructor highlights
 
-`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · callbacks · `showToolbar` · `rtl`
+`source` · `bookId` · `settings` · `encoding` · `initialCfi` · `persistProgress` · `persistSettings` · `trialLimit` · `onTrialLimitReached` · `watermarkText` · `enableInk` · `mediaOverlayCues` · `mediaOverlaySource` · `ttsEngine` · callbacks · `showToolbar` · `rtl`
 
 ```dart
 NovelReader(

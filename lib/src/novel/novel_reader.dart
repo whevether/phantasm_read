@@ -3,8 +3,7 @@ import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-
+import '../audio/novel_tts.dart';
 import '../common/ink_annotation.dart';
 import '../common/novel_reading_mode.dart';
 import '../common/novel_typography.dart';
@@ -55,6 +54,7 @@ class NovelReader extends StatefulWidget {
     this.showToolbar = true,
     this.rtl = false,
     this.pageTurnEffect = PageTurnEffect.curl,
+    this.ttsEngine,
   });
 
   final NovelSource source;
@@ -81,6 +81,7 @@ class NovelReader extends StatefulWidget {
   final bool showToolbar;
   final bool rtl;
   final PageTurnEffect pageTurnEffect;
+  final NovelTtsEngine? ttsEngine;
 
   @override
   State<NovelReader> createState() => _NovelReaderState();
@@ -106,7 +107,6 @@ class _NovelReaderState extends State<NovelReader>
   Timer? _autoScroll;
   Timer? _sessionTimer;
   DateTime? _sessionStarted;
-  FlutterTts? _tts;
   bool _ttsSpeaking = false;
   MediaOverlayPlayer? _overlay;
   int? _karaokeParagraph;
@@ -190,7 +190,7 @@ class _NovelReaderState extends State<NovelReader>
 
   Future<void> _leaveReading() async {
     _autoScroll?.cancel();
-    await _tts?.stop();
+    await widget.ttsEngine?.stop();
     await _overlay?.dispose();
     await _brightness.restore();
     await ReaderWakeLock.disable();
@@ -587,9 +587,10 @@ class _NovelReaderState extends State<NovelReader>
   }
 
   Future<void> _toggleTts() async {
-    _tts ??= FlutterTts();
+    final engine = widget.ttsEngine;
+    if (engine == null) return;
     if (_ttsSpeaking) {
-      await _tts!.stop();
+      await engine.stop();
       setState(() => _ttsSpeaking = false);
       return;
     }
@@ -603,10 +604,10 @@ class _NovelReaderState extends State<NovelReader>
             : '');
     if (text.isEmpty) return;
     setState(() => _ttsSpeaking = true);
-    await _tts!.speak(text);
-    _tts!.setCompletionHandler(() {
+    engine.setCompletionHandler(() {
       if (mounted) setState(() => _ttsSpeaking = false);
     });
+    await engine.speak(text);
   }
 
   Future<void> _page(int delta) async {
@@ -816,7 +817,7 @@ class _NovelReaderState extends State<NovelReader>
                   onHighlight: _addHighlight,
                   enableHighlights: widget.enableHighlights,
                   onAutoScroll: _toggleAutoScroll,
-                  onTts: _toggleTts,
+                  onTts: widget.ttsEngine == null ? null : _toggleTts,
                   onOverlayPlay: _overlay == null
                       ? null
                       : () => _overlay!.play(),
@@ -886,7 +887,7 @@ class _NovelToolbar extends StatelessWidget {
     required this.onHighlight,
     required this.enableHighlights,
     required this.onAutoScroll,
-    required this.onTts,
+    this.onTts,
     this.onOverlayPlay,
     this.onOverlayPause,
   });
@@ -906,7 +907,7 @@ class _NovelToolbar extends StatelessWidget {
   final VoidCallback onHighlight;
   final bool enableHighlights;
   final VoidCallback onAutoScroll;
-  final VoidCallback onTts;
+  final VoidCallback? onTts;
   final VoidCallback? onOverlayPlay;
   final VoidCallback? onOverlayPause;
 
@@ -1025,15 +1026,16 @@ class _NovelToolbar extends StatelessWidget {
                           color: autoScroll ? Colors.amber : Colors.white,
                         ),
                       ),
-                      IconButton(
-                        tooltip: '朗读',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onTts,
-                        icon: Icon(
-                          Icons.record_voice_over,
-                          color: ttsOn ? Colors.amber : Colors.white,
+                      if (onTts != null)
+                        IconButton(
+                          tooltip: '朗读',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: onTts,
+                          icon: Icon(
+                            Icons.record_voice_over,
+                            color: ttsOn ? Colors.amber : Colors.white,
+                          ),
                         ),
-                      ),
                       if (onOverlayPlay != null)
                         IconButton(
                           tooltip: '有声播放',
