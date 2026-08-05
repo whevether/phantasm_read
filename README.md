@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.jpeg" alt="phantasm_read" width="160"/>
+</p>
+
 # phantasm_read
 
 Cross-platform Flutter comic / novel / PDF reader package (`0.0.1`).
