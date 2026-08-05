@@ -9,7 +9,7 @@ class ReaderSettings {
     this.typography = const NovelTypography(),
     this.backgroundColor,
     this.foregroundColor,
-    this.novelReadingMode = NovelReadingMode.vertical,
+    this.novelReadingMode = NovelReadingMode.horizontal,
     this.comicFitMode = ComicFitMode.contain,
     this.doublePage = false,
     this.comicBackground = 0xFF000000,

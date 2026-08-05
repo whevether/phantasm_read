@@ -67,7 +67,7 @@ class ReaderSettingsStore {
       foregroundColor: json['foregroundColor'] as int?,
       novelReadingMode: NovelReadingMode.values.firstWhere(
         (e) => e.name == json['novelReadingMode'],
-        orElse: () => NovelReadingMode.vertical,
+        orElse: () => NovelReadingMode.horizontal,
       ),
       comicFitMode: ComicFitMode.values.firstWhere(
         (e) => e.name == json['comicFitMode'],

@@ -2,34 +2,54 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Simple page-curl style transition between two pages.
+/// Simple page-curl / book-flip style transition.
 class PageCurl extends StatelessWidget {
   const PageCurl({
     super.key,
     required this.progress,
     required this.child,
     this.backChild,
+    this.hinge = Alignment.centerLeft,
   });
 
-  /// 0 = fully shown, 1 = fully curled away.
+  /// 0 = flat, 1 = fully turned away.
   final double progress;
   final Widget child;
   final Widget? backChild;
+  final Alignment hinge;
+
+  bool get _fromLeft => hinge.x <= 0;
 
   @override
   Widget build(BuildContext context) {
     final t = progress.clamp(0.0, 1.0);
-    final angle = t * math.pi / 2;
+    if (t <= 0.001) return child;
+    final angle = t * math.pi / 2 * (_fromLeft ? -1 : 1);
     return Stack(
       fit: StackFit.expand,
+      clipBehavior: Clip.none,
       children: [
-        ?backChild,
+        if (backChild != null)
+          Positioned.fill(child: backChild!)
+        else
+          const SizedBox.expand(),
         Transform(
-          alignment: Alignment.centerLeft,
+          alignment: hinge,
           transform: Matrix4.identity()
-            ..setEntry(3, 2, 0.001)
-            ..rotateY(-angle),
-          child: child,
+            ..setEntry(3, 2, 0.0012)
+            ..rotateY(angle),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18 + t * 0.22),
+                  blurRadius: 8 + t * 18,
+                  offset: Offset(_fromLeft ? 4 + t * 10 : -(4 + t * 10), 0),
+                ),
+              ],
+            ),
+            child: child,
+          ),
         ),
       ],
     );
@@ -38,7 +58,7 @@ class PageCurl extends StatelessWidget {
 
 enum PageTurnEffect { none, curl }
 
-/// Horizontal page view with optional curl effect on swipe.
+/// Horizontal page view with optional book-curl effect while swiping.
 class CurlPageView extends StatefulWidget {
   const CurlPageView({
     super.key,
@@ -64,13 +84,36 @@ class CurlPageView extends StatefulWidget {
 class _CurlPageViewState extends State<CurlPageView> {
   late PageController _controller;
   double _page = 0;
+  bool _ownsController = false;
+  bool _listening = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = widget.controller ?? PageController();
+    _attachController(widget.controller);
+  }
+
+  void _attachController(PageController? controller) {
+    if (_listening) {
+      _controller.removeListener(_onScroll);
+      _listening = false;
+    }
+    if (_ownsController) {
+      _controller.dispose();
+    }
+    _ownsController = controller == null;
+    _controller = controller ?? PageController();
     _page = _controller.initialPage.toDouble();
     _controller.addListener(_onScroll);
+    _listening = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant CurlPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _attachController(widget.controller);
+    }
   }
 
   void _onScroll() {
@@ -80,34 +123,58 @@ class _CurlPageViewState extends State<CurlPageView> {
 
   @override
   void dispose() {
-    _controller.removeListener(_onScroll);
-    if (widget.controller == null) _controller.dispose();
+    if (_listening) {
+      _controller.removeListener(_onScroll);
+      _listening = false;
+    }
+    if (_ownsController) _controller.dispose();
     super.dispose();
+  }
+
+  Widget _wrapPage(int index) {
+    final child = widget.itemBuilder(context, index);
+    if (widget.effect == PageTurnEffect.none) return child;
+
+    final page = _page;
+
+    // Turning forward: page [index] curls left, reveals index + 1.
+    if (page > index && page < index + 1) {
+      final t = page - index;
+      final back = index + 1 < widget.itemCount
+          ? widget.itemBuilder(context, index + 1)
+          : null;
+      return PageCurl(
+        progress: t,
+        backChild: back,
+        child: child,
+      );
+    }
+
+    // Turning backward: page [index] curls right, reveals index - 1.
+    if (page < index && page > index - 1) {
+      final t = index - page;
+      final back = index - 1 >= 0
+          ? widget.itemBuilder(context, index - 1)
+          : null;
+      return PageCurl(
+        progress: t,
+        backChild: back,
+        hinge: Alignment.centerRight,
+        child: child,
+      );
+    }
+
+    return child;
   }
 
   @override
   Widget build(BuildContext context) {
-    if (widget.effect == PageTurnEffect.none) {
-      return PageView.builder(
-        controller: _controller,
-        itemCount: widget.itemCount,
-        reverse: widget.reverse,
-        onPageChanged: widget.onPageChanged,
-        itemBuilder: widget.itemBuilder,
-      );
-    }
-
     return PageView.builder(
       controller: _controller,
       itemCount: widget.itemCount,
       reverse: widget.reverse,
       onPageChanged: widget.onPageChanged,
-      itemBuilder: (context, index) {
-        final delta = (_page - index).abs().clamp(0.0, 1.0);
-        final child = widget.itemBuilder(context, index);
-        if (delta < 0.001) return child;
-        return PageCurl(progress: delta, child: child);
-      },
+      itemBuilder: (context, index) => _wrapPage(index),
     );
   }
 }

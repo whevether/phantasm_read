@@ -8,6 +8,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import '../common/ink_annotation.dart';
 import '../common/novel_reading_mode.dart';
 import '../common/novel_typography.dart';
+import '../common/page_curl.dart';
 import '../common/reader_bookmark.dart';
 import '../common/reader_brightness.dart';
 import '../common/reader_lifecycle.dart';
@@ -51,6 +52,7 @@ class NovelReader extends StatefulWidget {
     this.onKaraokeCue,
     this.showToolbar = true,
     this.rtl = false,
+    this.pageTurnEffect = PageTurnEffect.curl,
   });
 
   final NovelSource source;
@@ -75,6 +77,7 @@ class NovelReader extends StatefulWidget {
   final ValueChanged<MediaOverlayCue?>? onKaraokeCue;
   final bool showToolbar;
   final bool rtl;
+  final PageTurnEffect pageTurnEffect;
 
   @override
   State<NovelReader> createState() => _NovelReaderState();
@@ -589,6 +592,7 @@ class _NovelReaderState extends State<NovelReader>
         ?_karaokeParagraph,
       },
       rtl: widget.rtl,
+      pageTurnEffect: widget.pageTurnEffect,
       onParagraphChanged: (i) {
         _paragraphIndex = i;
         _saveProgress();

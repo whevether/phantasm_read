@@ -325,7 +325,6 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
     typography: NovelTypography(fontSize: 18, lineHeight: 1.7),
     backgroundColor: 0xFFFFF8E7,
     foregroundColor: 0xFF222222,
-    novelReadingMode: NovelReadingMode.vertical,
   );
 
   late final Uint8List _sampleBytes = Uint8List.fromList(

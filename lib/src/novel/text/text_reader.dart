@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
+import '../../common/page_curl.dart';
 import '../novel_chapter.dart';
 import '../novel_search.dart';
 import 'text_decoder.dart';
@@ -16,7 +17,7 @@ class TextReader extends StatefulWidget {
     required this.kind,
     required this.typography,
     this.encoding,
-    this.readingMode = NovelReadingMode.vertical,
+    this.readingMode = NovelReadingMode.horizontal,
     this.backgroundColor,
     this.foregroundColor,
     this.onChaptersLoaded,
@@ -25,6 +26,7 @@ class TextReader extends StatefulWidget {
     this.onParagraphChanged,
     this.highlightParagraphs = const {},
     this.rtl = false,
+    this.pageTurnEffect = PageTurnEffect.curl,
   });
 
   final Uint8List bytes;
@@ -40,6 +42,7 @@ class TextReader extends StatefulWidget {
   final ValueChanged<int>? onParagraphChanged;
   final Set<int> highlightParagraphs;
   final bool rtl;
+  final PageTurnEffect pageTurnEffect;
 
   @override
   State<TextReader> createState() => TextReaderState();
@@ -248,6 +251,44 @@ class TextReaderState extends State<TextReader> {
           ? TextAlign.justify
           : TextAlign.left;
 
+  Widget _buildHorizontalPage(
+    int index,
+    TextStyle style,
+    double margin,
+    Color bg,
+  ) {
+    return ColoredBox(
+      color: bg,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(margin, margin, margin, margin * 1.5),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bg,
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 6,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            child: ListView(
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                for (final para in _pages[index]) ...[
+                  Text(para, style: style, textAlign: _align),
+                  SizedBox(height: widget.typography.fontSize * 0.8),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bg = widget.backgroundColor ?? const Color(0xFFFFF8E7);
@@ -283,33 +324,19 @@ class TextReaderState extends State<TextReader> {
                 if (!_pagesReady || _pages.isEmpty) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                return PageView.builder(
+                return CurlPageView(
+                  key: ValueKey(Object.hash(_pages.length, _layoutSize)),
                   controller: _pageController,
                   reverse: widget.rtl,
+                  effect: widget.pageTurnEffect,
                   itemCount: _pages.length,
                   onPageChanged: (page) {
                     final p = _paragraphForPage(page);
                     _currentParagraph = p;
                     widget.onParagraphChanged?.call(p);
                   },
-                  itemBuilder: (context, index) {
-                    return Padding(
-                      padding: EdgeInsets.all(margin),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            for (final para in _pages[index]) ...[
-                              Text(para, style: style, textAlign: _align),
-                              SizedBox(
-                                height: widget.typography.fontSize * 0.8,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+                  itemBuilder: (context, index) =>
+                      _buildHorizontalPage(index, style, margin, bg),
                 );
               },
             );

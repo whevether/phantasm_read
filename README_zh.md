@@ -35,6 +35,7 @@ NovelReader(
   source: NovelSource.text('/path/to/book.txt'),
   settings: const ReaderSettings(
     typography: NovelTypography(fontSize: 18, lineHeight: 1.6),
+    // novelReadingMode defaults to horizontal (book-style paging)
   ),
 );
 
