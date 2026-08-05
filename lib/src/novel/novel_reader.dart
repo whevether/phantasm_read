@@ -16,6 +16,7 @@ import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
+import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
@@ -37,7 +38,8 @@ class NovelReader extends StatefulWidget {
     this.initialCfi,
     this.persistProgress = true,
     this.persistSettings = true,
-    this.maxReadablePages,
+    this.trialLimit,
+    this.onTrialLimitReached,
     this.watermarkText,
     this.enableInk = false,
     this.enableHighlights = true,
@@ -62,7 +64,8 @@ class NovelReader extends StatefulWidget {
   final String? initialCfi;
   final bool persistProgress;
   final bool persistSettings;
-  final int? maxReadablePages;
+  final ReaderTrialLimit? trialLimit;
+  final ReaderTrialLimitCallback? onTrialLimitReached;
   final String? watermarkText;
   final bool enableInk;
   final bool enableHighlights;
@@ -225,6 +228,83 @@ class _NovelReaderState extends State<NovelReader>
     return out;
   }
 
+  int get _readableChapterCount {
+    final limit = widget.trialLimit;
+    final flat = _flatChapters;
+    if (flat.isEmpty) return 0;
+    if (limit == null || !limit.isActive) return flat.length;
+    return limit.visibleCount(flat.length);
+  }
+
+  int get _maxReadableChapterIndex {
+    final limit = widget.trialLimit;
+    final flat = _flatChapters;
+    if (flat.isEmpty) return 0;
+    if (limit == null || !limit.isActive) return flat.length - 1;
+    return limit.maxReadableIndex(flat.length);
+  }
+
+  bool get _hasMoreBeyondTrial {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return false;
+    return limit.hasMoreBeyond(_flatChapters.length);
+  }
+
+  int? get _trialMinParagraphIndex {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive || limit.startIndex <= 0) {
+      return null;
+    }
+    final flat = _flatChapters;
+    if (limit.startIndex >= flat.length) return null;
+    return flat[limit.startIndex].anchorIndex;
+  }
+
+  int? get _trialMaxParagraphIndex {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return null;
+    final flat = _flatChapters;
+    final endChapter = limit.startIndex + limit.maxCount;
+    if (flat.length <= endChapter) return null;
+    final blocked = flat[endChapter];
+    final anchor = blocked.anchorIndex;
+    if (anchor == null || anchor <= 0) return null;
+    return anchor - 1;
+  }
+
+  void _notifyTrialLimit(ReaderTrialLimitAction action, int targetIndex) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return;
+    widget.onTrialLimitReached?.call(
+      ReaderTrialLimitEvent(
+        limit: limit,
+        currentIndex: _chapterIndex,
+        targetIndex: targetIndex,
+        totalCount: _flatChapters.length,
+        action: action,
+      ),
+    );
+  }
+
+  int _chapterIndexForParagraph(int paragraphIndex) {
+    final flat = _flatChapters;
+    if (flat.isEmpty) return 0;
+    var chapter = 0;
+    for (var i = 0; i < flat.length; i++) {
+      final anchor = flat[i].anchorIndex;
+      if (anchor != null && anchor <= paragraphIndex) {
+        chapter = i;
+      }
+    }
+    return chapter;
+  }
+
+  bool _isChapterReadable(int chapterIndex) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return true;
+    return limit.isReadable(chapterIndex, _flatChapters.length);
+  }
+
   @override
   void didUpdateWidget(covariant NovelReader oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -279,7 +359,13 @@ class _NovelReaderState extends State<NovelReader>
   Future<void> _goChapter(int delta) async {
     final flat = _flatChapters;
     if (flat.isEmpty) return;
-    final next = (_chapterIndex + delta).clamp(0, flat.length - 1);
+    final start = widget.trialLimit?.startIndex ?? 0;
+    final maxIdx = _maxReadableChapterIndex;
+    if (delta > 0 && _chapterIndex >= maxIdx && _hasMoreBeyondTrial) {
+      _notifyTrialLimit(ReaderTrialLimitAction.next, _chapterIndex + 1);
+      return;
+    }
+    final next = (_chapterIndex + delta).clamp(start, maxIdx);
     _chapterIndex = next;
     widget.onChapterChanged?.call(next);
     await _goToChapter(flat[next]);
@@ -329,6 +415,13 @@ class _NovelReaderState extends State<NovelReader>
                   (e) => e.title == c.title && e.href == c.href,
                 );
                 if (_chapterIndex < 0) _chapterIndex = 0;
+                if (!_isChapterReadable(_chapterIndex)) {
+                  _notifyTrialLimit(
+                    ReaderTrialLimitAction.chapterSelect,
+                    _chapterIndex,
+                  );
+                  return;
+                }
                 widget.onChapterChanged?.call(_chapterIndex);
                 await _goToChapter(c);
               },
@@ -385,6 +478,16 @@ class _NovelReaderState extends State<NovelReader>
                                   if (h.cfi != null && h.cfi!.isNotEmpty) {
                                     await _epubController.goToChapter(h.cfi!);
                                   } else if (h.paragraphIndex != null) {
+                                    final max = _trialMaxParagraphIndex;
+                                    if (max != null && h.paragraphIndex! > max) {
+                                      _notifyTrialLimit(
+                                        ReaderTrialLimitAction.search,
+                                        _chapterIndexForParagraph(
+                                          h.paragraphIndex!,
+                                        ),
+                                      );
+                                      return;
+                                    }
                                     await _textKey.currentState
                                         ?.jumpToParagraph(h.paragraphIndex!);
                                   }
@@ -508,6 +611,11 @@ class _NovelReaderState extends State<NovelReader>
 
   Future<void> _page(int delta) async {
     if (_isEpub) {
+      if (delta > 0 && _hasMoreBeyondTrial &&
+          _chapterIndex >= _maxReadableChapterIndex) {
+        _notifyTrialLimit(ReaderTrialLimitAction.next, _chapterIndex + 1);
+        return;
+      }
       if (delta > 0) {
         await _epubController.next();
       } else {
@@ -516,7 +624,10 @@ class _NovelReaderState extends State<NovelReader>
       return;
     }
     if (delta > 0) {
-      await _textKey.currentState?.nextPage();
+      final advanced = await _textKey.currentState?.nextPage() ?? false;
+      if (!advanced && _hasMoreBeyondTrial) {
+        _notifyTrialLimit(ReaderTrialLimitAction.next, _chapterIndex + 1);
+      }
     } else {
       await _textKey.currentState?.prevPage();
     }
@@ -586,6 +697,8 @@ class _NovelReaderState extends State<NovelReader>
       onChaptersLoaded: _onChapters,
       jumpToParagraph: _jumpToParagraph,
       initialParagraph: _paragraphIndex,
+      minParagraphIndex: _trialMinParagraphIndex,
+      maxParagraphIndex: _trialMaxParagraphIndex,
       highlightParagraphs: {
         for (final h in _highlights)
           if (h.paragraphIndex != null) h.paragraphIndex!,
@@ -595,6 +708,7 @@ class _NovelReaderState extends State<NovelReader>
       pageTurnEffect: widget.pageTurnEffect,
       onParagraphChanged: (i) {
         _paragraphIndex = i;
+        _chapterIndex = _chapterIndexForParagraph(i);
         _saveProgress();
       },
     );
@@ -606,9 +720,14 @@ class _NovelReaderState extends State<NovelReader>
       return const Center(child: CircularProgressIndicator());
     }
     final flat = _flatChapters;
+    final readable = _readableChapterCount;
     final progress = flat.isEmpty
         ? (_paragraphIndex + 1) / 100.0
-        : ((_chapterIndex + 1) / flat.length).clamp(0.0, 1.0);
+        : readable == 0
+            ? 0.0
+            : ((_chapterIndex - (widget.trialLimit?.startIndex ?? 0) + 1) /
+                    readable)
+                .clamp(0.0, 1.0);
 
     return Focus(
       autofocus: true,
@@ -668,11 +787,16 @@ class _NovelReaderState extends State<NovelReader>
                 ReaderProgressBar(
                   progress: progress.clamp(0.0, 1.0),
                   onSeek: (v) {
-                    final flat = _flatChapters;
-                    if (flat.isEmpty) return;
-                    final i = (v * (flat.length - 1)).round();
+                    final chapters = _flatChapters;
+                    if (chapters.isEmpty || readable == 0) return;
+                    final start = widget.trialLimit?.startIndex ?? 0;
+                    final i = start + (v * (readable - 1)).round();
+                    if (!_isChapterReadable(i)) {
+                      _notifyTrialLimit(ReaderTrialLimitAction.seek, i);
+                      return;
+                    }
                     _chapterIndex = i;
-                    _goToChapter(flat[i]);
+                    _goToChapter(chapters[i]);
                   },
                 ),
               if (widget.showToolbar && _toolbarVisible)

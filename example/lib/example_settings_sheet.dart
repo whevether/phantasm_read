@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
+import 'trial_feedback.dart';
 
 Future<void> showExampleSettingsSheet(
   BuildContext context,
@@ -55,7 +56,7 @@ Future<void> showExampleSettingsSheet(
                     value: options.comicTrial,
                     onChanged: options.setComicTrial,
                   ),
-                  if (options.comicTrial)
+                  if (options.comicTrial) ...[
                     ListTile(
                       dense: true,
                       title: const Text('试读页数'),
@@ -72,6 +73,23 @@ Future<void> showExampleSettingsSheet(
                         ),
                       ),
                     ),
+                    ListTile(
+                      dense: true,
+                      title: const Text('起始页（0 起）'),
+                      trailing: SizedBox(
+                        width: 120,
+                        child: Slider(
+                          min: 0,
+                          max: 4,
+                          divisions: 4,
+                          label: '${options.comicTrialStartPage}',
+                          value: options.comicTrialStartPage.toDouble(),
+                          onChanged: (v) =>
+                              options.setComicTrialStartPage(v.round()),
+                        ),
+                      ),
+                    ),
+                  ],
                   SwitchListTile(
                     dense: true,
                     title: const Text('云同步 onSync'),
@@ -138,10 +156,44 @@ Future<void> showExampleSettingsSheet(
                   ),
                   SwitchListTile(
                     dense: true,
-                    title: const Text('试读限制'),
+                    title: const Text('试读限制（章）'),
                     value: options.novelTrial,
                     onChanged: options.setNovelTrial,
                   ),
+                  if (options.novelTrial) ...[
+                    ListTile(
+                      dense: true,
+                      title: const Text('试读章数'),
+                      trailing: SizedBox(
+                        width: 120,
+                        child: Slider(
+                          min: 1,
+                          max: 12,
+                          divisions: 11,
+                          label: '${options.novelTrialChapters}',
+                          value: options.novelTrialChapters.toDouble(),
+                          onChanged: (v) =>
+                              options.setNovelTrialChapters(v.round()),
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      dense: true,
+                      title: const Text('起始章（0 起）'),
+                      trailing: SizedBox(
+                        width: 120,
+                        child: Slider(
+                          min: 0,
+                          max: 8,
+                          divisions: 8,
+                          label: '${options.novelTrialStartChapter}',
+                          value: options.novelTrialStartChapter.toDouble(),
+                          onChanged: (v) =>
+                              options.setNovelTrialStartChapter(v.round()),
+                        ),
+                      ),
+                    ),
+                  ],
                   SwitchListTile(
                     dense: true,
                     title: const Text('RTL'),
@@ -158,10 +210,43 @@ Future<void> showExampleSettingsSheet(
                   ),
                   SwitchListTile(
                     dense: true,
-                    title: const Text('试读页数'),
+                    title: const Text('试读页数限制'),
                     value: options.pdfTrial,
                     onChanged: options.setPdfTrial,
                   ),
+                  if (options.pdfTrial) ...[
+                    ListTile(
+                      dense: true,
+                      title: const Text('试读页数'),
+                      trailing: SizedBox(
+                        width: 120,
+                        child: Slider(
+                          min: 1,
+                          max: 10,
+                          divisions: 9,
+                          label: '${options.pdfTrialPages}',
+                          value: options.pdfTrialPages.toDouble(),
+                          onChanged: (v) => options.setPdfTrialPages(v.round()),
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      dense: true,
+                      title: const Text('起始页（0 起）'),
+                      trailing: SizedBox(
+                        width: 120,
+                        child: Slider(
+                          min: 0,
+                          max: 4,
+                          divisions: 4,
+                          label: '${options.pdfTrialStartPage}',
+                          value: options.pdfTrialStartPage.toDouble(),
+                          onChanged: (v) =>
+                              options.setPdfTrialStartPage(v.round()),
+                        ),
+                      ),
+                    ),
+                  ],
                   ListTile(
                     dense: true,
                     title: const Text('光栅 DPI'),
@@ -175,6 +260,32 @@ Future<void> showExampleSettingsSheet(
                         value: options.pdfRasterDpi,
                         onChanged: options.setPdfRasterDpi,
                       ),
+                    ),
+                  ),
+                  const Divider(height: 16),
+                  _section('试读反馈（由宿主处理）'),
+                  ListTile(
+                    dense: true,
+                    title: const Text('触顶时展示'),
+                    trailing: DropdownButton<ExampleTrialFeedback>(
+                      value: options.trialFeedback,
+                      items: const [
+                        DropdownMenuItem(
+                          value: ExampleTrialFeedback.dialog,
+                          child: Text('弹窗'),
+                        ),
+                        DropdownMenuItem(
+                          value: ExampleTrialFeedback.snackbar,
+                          child: Text('SnackBar'),
+                        ),
+                        DropdownMenuItem(
+                          value: ExampleTrialFeedback.none,
+                          child: Text('无'),
+                        ),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) options.setTrialFeedback(v);
+                      },
                     ),
                   ),
                 ],

@@ -14,6 +14,7 @@ import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
+import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
@@ -32,7 +33,8 @@ class ComicReader extends StatefulWidget {
     this.initialPage = 0,
     this.persistProgress = true,
     this.persistSettings = true,
-    this.maxReadablePages,
+    this.trialLimit,
+    this.onTrialLimitReached,
     this.watermarkText,
     this.enableInk = false,
     this.pageTurnEffect = PageTurnEffect.none,
@@ -51,7 +53,8 @@ class ComicReader extends StatefulWidget {
   final int initialPage;
   final bool persistProgress;
   final bool persistSettings;
-  final int? maxReadablePages;
+  final ReaderTrialLimit? trialLimit;
+  final ReaderTrialLimitCallback? onTrialLimitReached;
   final String? watermarkText;
   final bool enableInk;
   final PageTurnEffect pageTurnEffect;
@@ -85,34 +88,57 @@ class _ComicReaderState extends State<ComicReader>
       _mode == ComicReadingMode.horizontal &&
       widget.pages.length > 1;
 
-  int _pageCountFor({bool? doublePage, ComicReadingMode? mode}) {
+  int _pageCountFor({
+    bool? doublePage,
+    ComicReadingMode? mode,
+    ReaderTrialLimit? trial,
+  }) {
     final dp = doublePage ?? _settings.doublePage;
     final m = mode ?? _mode;
-    final total = () {
-      if (dp &&
-          m == ComicReadingMode.horizontal &&
-          widget.pages.length > 1) {
-        return (widget.pages.length / 2).ceil();
-      }
-      return widget.pages.length;
-    }();
-    return trialPageCount(total, widget.maxReadablePages);
+    final rawTotal = widget.pages.length;
+    final t = trial ?? widget.trialLimit;
+    if (dp && m == ComicReadingMode.horizontal && rawTotal > 1) {
+      final start = t?.startIndex ?? 0;
+      final visibleRaw = t == null || !t.isActive
+          ? rawTotal
+          : t.visibleCount(rawTotal);
+      if (visibleRaw <= 0) return 0;
+      final firstSpread = start ~/ 2;
+      final lastRaw = start + visibleRaw - 1;
+      final lastSpread = lastRaw ~/ 2;
+      return (lastSpread - firstSpread + 1).clamp(1, rawTotal);
+    }
+    final total = rawTotal;
+    if (t == null || !t.isActive) return total;
+    return t.visibleCount(total);
   }
+
+  int get _fullPageCount => widget.pages.length;
 
   int get _pageCount => _pageCountFor();
 
   int _rawIndex(int logical) {
+    final start = widget.trialLimit?.startIndex ?? 0;
     if (_doublePageActive) {
-      return (logical * 2).clamp(0, widget.pages.length - 1);
+      return (start + logical * 2).clamp(0, widget.pages.length - 1);
     }
-    return logical.clamp(0, widget.pages.length - 1);
+    return (start + logical).clamp(0, widget.pages.length - 1);
   }
 
-  int get _currentRawIndex {
-    if (_doublePageActive) {
-      return (_currentPage * 2).clamp(0, widget.pages.length - 1);
-    }
-    return _currentPage.clamp(0, widget.pages.length - 1);
+  int _contentPageIndex(int logicalIndex) => _rawIndex(logicalIndex);
+
+  void _notifyTrialLimit(ReaderTrialLimitAction action, int targetIndex) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return;
+    widget.onTrialLimitReached?.call(
+      ReaderTrialLimitEvent(
+        limit: limit,
+        currentIndex: _contentPageIndex(_currentPage),
+        targetIndex: targetIndex,
+        totalCount: widget.pages.length,
+        action: action,
+      ),
+    );
   }
 
   int _logicalIndexForRaw(
@@ -120,14 +146,15 @@ class _ComicReaderState extends State<ComicReader>
     bool? doublePage,
     ComicReadingMode? mode,
   }) {
+    final start = widget.trialLimit?.startIndex ?? 0;
     final dp = doublePage ?? _settings.doublePage;
     final m = mode ?? _mode;
     final count = _pageCountFor(doublePage: dp, mode: m);
     if (count == 0) return 0;
     if (dp && m == ComicReadingMode.horizontal) {
-      return (raw ~/ 2).clamp(0, count - 1);
+      return ((raw - start) ~/ 2).clamp(0, count - 1);
     }
-    return raw.clamp(0, count - 1);
+    return (raw - start).clamp(0, count - 1);
   }
 
   void _syncPageIndexAfterLayoutChange() {
@@ -269,6 +296,8 @@ class _ComicReaderState extends State<ComicReader>
     }
   }
 
+  int get _currentRawIndex => _contentPageIndex(_currentPage);
+
   void _emitSettings(ReaderSettings next) {
     final wasDouble = _doublePageActive;
     final enablingDouble = next.doublePage && !_settings.doublePage;
@@ -306,11 +335,29 @@ class _ComicReaderState extends State<ComicReader>
     widget.onSettingsChanged?.call(next);
   }
 
-  void _goToPage(int page) {
-    final p = clampTrialPage(page, _pageCount, null);
-    _pageController?.jumpToPage(p);
-    setState(() => _currentPage = p);
-    widget.onPageChanged?.call(p);
+  void _goToPage(int logicalPage) {
+    final limit = widget.trialLimit;
+    final total = widget.pages.length;
+    var target = logicalPage;
+    if (limit != null && limit.isActive) {
+      final contentTarget = _contentPageIndex(
+        logicalPage.clamp(0, _pageCount - 1),
+      );
+      if (logicalPage < 0 ||
+          logicalPage >= _pageCount ||
+          !limit.isReadable(contentTarget, total)) {
+        _notifyTrialLimit(
+          ReaderTrialLimitAction.seek,
+          logicalPage < 0 ? 0 : _contentPageIndex(_pageCount - 1) + 1,
+        );
+        target = limit.logicalIndex(limit.clampIndex(contentTarget, total));
+      }
+    } else {
+      target = logicalPage.clamp(0, (total - 1).clamp(0, 1 << 30));
+    }
+    _pageController?.jumpToPage(target);
+    setState(() => _currentPage = target);
+    widget.onPageChanged?.call(_contentPageIndex(target));
     _saveProgress();
   }
 
@@ -319,6 +366,12 @@ class _ComicReaderState extends State<ComicReader>
       case TapZoneAction.previous:
         _goToPage(_currentPage - 1);
       case TapZoneAction.next:
+        final limit = widget.trialLimit;
+        final content = _contentPageIndex(_currentPage);
+        if (limit != null && limit.atBoundary(content, widget.pages.length)) {
+          _notifyTrialLimit(ReaderTrialLimitAction.next, content + 1);
+          return;
+        }
         _goToPage(_currentPage + 1);
       case TapZoneAction.toggleToolbar:
         if (widget.showToolbar) {
@@ -548,7 +601,7 @@ class _ComicReaderState extends State<ComicReader>
                             widget.rtl && _mode == ComicReadingMode.horizontal,
                         onPageChanged: (index) {
                           _currentPage = index;
-                          widget.onPageChanged?.call(index);
+                          widget.onPageChanged?.call(_contentPageIndex(index));
                           _precacheNeighbors(index);
                           _saveProgress();
                           if (mounted) setState(() {});
@@ -573,7 +626,7 @@ class _ComicReaderState extends State<ComicReader>
                   ),
                 if (widget.showToolbar && _toolbarVisible)
                   _ComicToolbar(
-                    pageLabel: '${_currentPage + 1} / $_pageCount',
+                    pageLabel: '${_contentPageIndex(_currentPage) + 1} / $_fullPageCount',
                     progress: progress,
                     settings: _settings,
                     mode: _mode,

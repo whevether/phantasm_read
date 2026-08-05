@@ -27,6 +27,8 @@ class TextReader extends StatefulWidget {
     this.highlightParagraphs = const {},
     this.rtl = false,
     this.pageTurnEffect = PageTurnEffect.curl,
+    this.minParagraphIndex,
+    this.maxParagraphIndex,
   });
 
   final Uint8List bytes;
@@ -43,6 +45,8 @@ class TextReader extends StatefulWidget {
   final Set<int> highlightParagraphs;
   final bool rtl;
   final PageTurnEffect pageTurnEffect;
+  final int? minParagraphIndex;
+  final int? maxParagraphIndex;
 
   @override
   State<TextReader> createState() => TextReaderState();
@@ -93,10 +97,32 @@ class TextReaderState extends State<TextReader> {
       });
     }
     if (oldWidget.typography != widget.typography ||
-        oldWidget.readingMode != widget.readingMode) {
+        oldWidget.readingMode != widget.readingMode ||
+        oldWidget.minParagraphIndex != widget.minParagraphIndex ||
+        oldWidget.maxParagraphIndex != widget.maxParagraphIndex) {
       _pagesReady = false;
       _layoutSize = null;
     }
+  }
+
+  int get _firstReadableParagraph {
+    final min = widget.minParagraphIndex;
+    if (min == null) return 0;
+    if (_paragraphs.isEmpty) return 0;
+    return min.clamp(0, _paragraphs.length - 1);
+  }
+
+  int get _lastReadableParagraph {
+    final max = widget.maxParagraphIndex;
+    if (max == null) return _paragraphs.length - 1;
+    if (_paragraphs.isEmpty) return 0;
+    return max.clamp(0, _paragraphs.length - 1);
+  }
+
+  bool get _atTrialEnd {
+    final max = widget.maxParagraphIndex;
+    if (max == null || _paragraphs.isEmpty) return false;
+    return _currentParagraph >= max && max < _paragraphs.length - 1;
   }
 
   Future<_TextBook> _load() async {
@@ -139,8 +165,12 @@ class TextReaderState extends State<TextReader> {
       widget.foregroundColor ?? const Color(0xFF222222),
     );
     final margin = widget.typography.pageMargin;
+    final readable = _paragraphs.sublist(
+      _firstReadableParagraph,
+      _lastReadableParagraph + 1,
+    );
     _pages = paginateParagraphs(
-      paragraphs: _paragraphs,
+      paragraphs: readable,
       pageSize: size,
       style: style,
       padding: EdgeInsets.all(margin),
@@ -175,7 +205,7 @@ class TextReaderState extends State<TextReader> {
 
   Future<void> jumpToParagraph(int index) async {
     if (_paragraphs.isEmpty) return;
-    final i = index.clamp(0, _paragraphs.length - 1);
+    final i = index.clamp(_firstReadableParagraph, _lastReadableParagraph);
     _currentParagraph = i;
     widget.onParagraphChanged?.call(i);
     if (widget.readingMode == NovelReadingMode.horizontal) {
@@ -200,20 +230,23 @@ class TextReaderState extends State<TextReader> {
     }
   }
 
-  Future<void> nextPage() async {
+  Future<bool> nextPage() async {
+    if (_atTrialEnd) return false;
     if (widget.readingMode == NovelReadingMode.horizontal) {
       if (_pageController?.hasClients ?? false) {
+        final page = _pageController!.page?.round() ?? 0;
+        if (page >= _pages.length - 1) return _atTrialEnd;
         await _pageController!.nextPage(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
       }
-      return;
+      return true;
     }
-    if (_paragraphs.isEmpty) return;
-    await jumpToParagraph(
-      (_currentParagraph + 1).clamp(0, _paragraphs.length - 1),
-    );
+    if (_paragraphs.isEmpty) return false;
+    if (_currentParagraph >= _lastReadableParagraph) return false;
+    await jumpToParagraph(_currentParagraph + 1);
+    return true;
   }
 
   Future<void> prevPage() async {
@@ -313,6 +346,9 @@ class TextReaderState extends State<TextReader> {
           }
           _paragraphs = book.paragraphs;
 
+          final visibleStart = _firstReadableParagraph;
+          final visibleCount = _lastReadableParagraph - visibleStart + 1;
+
           if (widget.readingMode == NovelReadingMode.horizontal) {
             return LayoutBuilder(
               builder: (context, constraints) {
@@ -348,25 +384,26 @@ class TextReaderState extends State<TextReader> {
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
                 sliver: SliverList.separated(
-                  itemCount: book.paragraphs.length,
+                  itemCount: visibleCount,
                   separatorBuilder: (_, _) =>
                       SizedBox(height: widget.typography.fontSize * 0.8),
                   itemBuilder: (context, index) {
+                    final paragraphIndex = visibleStart + index;
                     final highlighted =
-                        widget.highlightParagraphs.contains(index);
+                        widget.highlightParagraphs.contains(paragraphIndex);
                     return KeyedSubtree(
-                      key: _paragraphKeys[index],
+                      key: _paragraphKeys[paragraphIndex],
                       child: Container(
                         color: highlighted
                             ? const Color(0x66FFEB3B)
                             : Colors.transparent,
                         child: SelectableText(
-                          book.paragraphs[index],
+                          book.paragraphs[paragraphIndex],
                           style: style,
                           textAlign: _align,
                           onTap: () {
-                            _currentParagraph = index;
-                            widget.onParagraphChanged?.call(index);
+                            _currentParagraph = paragraphIndex;
+                            widget.onParagraphChanged?.call(paragraphIndex);
                           },
                         ),
                       ),

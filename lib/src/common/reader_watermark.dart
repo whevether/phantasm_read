@@ -60,17 +60,3 @@ class _WatermarkPainter extends CustomPainter {
   bool shouldRepaint(covariant _WatermarkPainter oldDelegate) =>
       oldDelegate.text != text;
 }
-
-/// Caps readable pages for preview / trial mode.
-int clampTrialPage(int page, int total, int? maxReadablePages) {
-  if (maxReadablePages == null || maxReadablePages <= 0) {
-    return page.clamp(0, (total - 1).clamp(0, 1 << 30));
-  }
-  final maxIndex = (maxReadablePages - 1).clamp(0, total - 1);
-  return page.clamp(0, maxIndex);
-}
-
-int trialPageCount(int total, int? maxReadablePages) {
-  if (maxReadablePages == null || maxReadablePages <= 0) return total;
-  return maxReadablePages.clamp(0, total);
-}

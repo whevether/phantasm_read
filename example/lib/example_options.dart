@@ -1,13 +1,16 @@
 import 'package:flutter/foundation.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 
+import 'trial_feedback.dart';
+
 /// 示例应用高级功能开关（常用阅读能力默认开启，见各 Reader 构造参数）。
 class ExampleReaderOptions extends ChangeNotifier {
   // —— 漫画 ——
   bool comicWatermark = false;
   bool comicInk = false;
-  bool comicTrial = false;
+  bool comicTrial = true;
   int comicTrialPages = 3;
+  int comicTrialStartPage = 0;
   bool comicSync = false;
   bool comicRtl = false;
   bool comicDoublePage = false;
@@ -18,16 +21,21 @@ class ExampleReaderOptions extends ChangeNotifier {
   bool novelInk = false;
   bool novelHighlight = false;
   bool novelSync = false;
-  bool novelTrial = false;
-  int novelTrialPages = 5;
+  bool novelTrial = true;
+  int novelTrialChapters = 3;
+  int novelTrialStartChapter = 0;
   bool novelRtl = false;
   bool novelMediaOverlay = false;
 
   // —— PDF ——
   bool pdfWatermark = false;
-  bool pdfTrial = false;
-  int pdfTrialPages = 2;
+  bool pdfTrial = true;
+  int pdfTrialPages = 3;
+  int pdfTrialStartPage = 0;
   double pdfRasterDpi = 120;
+
+  /// 试读触顶时示例应用的反馈方式（插件本身不展示 UI）。
+  ExampleTrialFeedback trialFeedback = ExampleTrialFeedback.dialog;
 
   void setComicWatermark(bool v) {
     comicWatermark = v;
@@ -46,6 +54,11 @@ class ExampleReaderOptions extends ChangeNotifier {
 
   void setComicTrialPages(int v) {
     comicTrialPages = v;
+    notifyListeners();
+  }
+
+  void setComicTrialStartPage(int v) {
+    comicTrialStartPage = v;
     notifyListeners();
   }
 
@@ -94,6 +107,16 @@ class ExampleReaderOptions extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setNovelTrialChapters(int v) {
+    novelTrialChapters = v;
+    notifyListeners();
+  }
+
+  void setNovelTrialStartChapter(int v) {
+    novelTrialStartChapter = v;
+    notifyListeners();
+  }
+
   void setNovelRtl(bool v) {
     novelRtl = v;
     notifyListeners();
@@ -109,8 +132,23 @@ class ExampleReaderOptions extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setPdfTrialPages(int v) {
+    pdfTrialPages = v;
+    notifyListeners();
+  }
+
+  void setPdfTrialStartPage(int v) {
+    pdfTrialStartPage = v;
+    notifyListeners();
+  }
+
   void setPdfRasterDpi(double v) {
     pdfRasterDpi = v;
+    notifyListeners();
+  }
+
+  void setTrialFeedback(ExampleTrialFeedback v) {
+    trialFeedback = v;
     notifyListeners();
   }
 
@@ -123,9 +161,24 @@ class ExampleReaderOptions extends ChangeNotifier {
   String? get pdfWatermarkText =>
       pdfWatermark ? 'phantasm_read · pdf' : null;
 
-  int? get comicMaxReadable => comicTrial ? comicTrialPages : null;
+  ReaderTrialLimit? get comicTrialLimit => comicTrial
+      ? ReaderTrialLimit.pages(
+          comicTrialPages,
+          startPage: comicTrialStartPage,
+        )
+      : null;
 
-  int? get novelMaxReadable => novelTrial ? novelTrialPages : null;
+  ReaderTrialLimit? get novelTrialLimit => novelTrial
+      ? ReaderTrialLimit.chapters(
+          novelTrialChapters,
+          startChapter: novelTrialStartChapter,
+        )
+      : null;
 
-  int? get pdfMaxReadable => pdfTrial ? pdfTrialPages : null;
+  ReaderTrialLimit? get pdfTrialLimit => pdfTrial
+      ? ReaderTrialLimit.pages(
+          pdfTrialPages,
+          startPage: pdfTrialStartPage,
+        )
+      : null;
 }

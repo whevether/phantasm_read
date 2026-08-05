@@ -6,6 +6,7 @@ import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
 import 'example_settings_sheet.dart';
+import 'trial_feedback.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,7 +124,7 @@ class _HomePageState extends State<_HomePage> {
     final tags = <String>['翻页', '缩放', '书签'];
     if (_options.comicInk) tags.add('手绘');
     if (_options.comicWatermark) tags.add('水印');
-    if (_options.comicTrial) tags.add('试读');
+    if (_options.comicTrial) tags.add('试读${_options.comicTrialPages}页');
     return tags.join(' · ');
   }
 
@@ -132,13 +133,14 @@ class _HomePageState extends State<_HomePage> {
     if (_options.novelHighlight) tags.add('高亮');
     if (_options.novelInk) tags.add('手绘');
     if (_options.novelWatermark) tags.add('水印');
+    if (_options.novelTrial) tags.add('试读${_options.novelTrialChapters}章');
     return tags.join(' · ');
   }
 
   String get _pdfSubtitle {
     final tags = <String>['pdf 3.13', '翻页'];
     if (_options.pdfWatermark) tags.add('水印');
-    if (_options.pdfTrial) tags.add('试读');
+    if (_options.pdfTrial) tags.add('试读${_options.pdfTrialPages}页');
     return tags.join(' · ');
   }
 
@@ -257,7 +259,11 @@ class _ComicDemoPageState extends State<_ComicDemoPage> {
             settings: _settings,
             rtl: o.comicRtl,
             persistSettings: false,
-            maxReadablePages: o.comicMaxReadable,
+            trialLimit: o.comicTrialLimit,
+            onTrialLimitReached: (event) {
+              if (!context.mounted) return;
+              handleTrialLimit(context, o.trialFeedback, event);
+            },
             watermarkText: o.comicWatermarkText,
             enableInk: o.comicInk,
             pageTurnEffect: o.comicPageTurn,
@@ -371,7 +377,11 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
             source: NovelSource.textBytes(_sampleBytes, name: 'phantasm_sample.txt'),
             settings: _settings,
             persistSettings: false,
-            maxReadablePages: o.novelMaxReadable,
+            trialLimit: o.novelTrialLimit,
+            onTrialLimitReached: (event) {
+              if (!context.mounted) return;
+              handleTrialLimit(context, o.trialFeedback, event);
+            },
             watermarkText: o.novelWatermarkText,
             enableInk: o.novelInk,
             enableHighlights: o.novelHighlight,
@@ -393,7 +403,7 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
 Uint8List _samplePdfBytes() {
   const objects = <String>[
     '1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n',
-    '2 0 obj<< /Type /Pages /Kids [3 0 R 6 0 R 8 0 R] /Count 3 >>endobj\n',
+    '2 0 obj<< /Type /Pages /Kids [3 0 R 6 0 R 8 0 R 10 0 R 12 0 R] /Count 5 >>endobj\n',
     '3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
         '/Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
     '4 0 obj<< /Length 68 >>stream\n'
@@ -409,6 +419,16 @@ Uint8List _samplePdfBytes() {
         '/Contents 9 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
     '9 0 obj<< /Length 68 >>stream\n'
         'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 3) Tj ET\n'
+        'endstream\nendobj\n',
+    '10 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
+        '/Contents 11 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
+    '11 0 obj<< /Length 68 >>stream\n'
+        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 4) Tj ET\n'
+        'endstream\nendobj\n',
+    '12 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
+        '/Contents 13 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
+    '13 0 obj<< /Length 68 >>stream\n'
+        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 5) Tj ET\n'
         'endstream\nendobj\n',
   ];
 
@@ -458,7 +478,11 @@ class _PdfDemoPage extends StatelessWidget {
               _samplePdfBytes(),
               name: 'phantasm_sample.pdf',
             ),
-            maxReadablePages: options.pdfMaxReadable,
+            trialLimit: options.pdfTrialLimit,
+            onTrialLimitReached: (event) {
+              if (!context.mounted) return;
+              handleTrialLimit(context, options.trialFeedback, event);
+            },
             watermarkText: options.pdfWatermarkText,
             rasterDpi: options.pdfRasterDpi,
             settings: const ReaderSettings(brightness: 0.9, keepScreenOn: true),

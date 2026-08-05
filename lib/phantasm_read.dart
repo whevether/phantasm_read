@@ -17,6 +17,7 @@ export 'src/common/reader_settings.dart';
 export 'src/common/reader_settings_store.dart';
 export 'src/common/reader_sync.dart';
 export 'src/common/reader_wake_lock.dart';
+export 'src/common/reader_trial_limit.dart';
 export 'src/common/reader_watermark.dart';
 export 'src/common/tap_zones.dart';
 export 'src/novel/epub/epub_viewer.dart';

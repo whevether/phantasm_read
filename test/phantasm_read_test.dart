@@ -52,4 +52,18 @@ void main() {
     expect(again.bookId, 'b1');
     expect(again.pageIndex, 3);
   });
+
+  test('trial helpers', () {
+    final limit = ReaderTrialLimit.pages(3);
+    expect(limit.visibleCount(10), 3);
+    expect(limit.hasMoreBeyond(10), isTrue);
+    expect(limit.atBoundary(2, 10), isTrue);
+    expect(limit.clampIndex(9, 10), 2);
+    expect(
+      ReaderTrialLimit.chapters(3, startChapter: 1).maxReadableIndex(12),
+      3,
+    );
+    expect(trialPageCount(10, 3), 3);
+    expect(clampTrialPage(9, 10, 3), 2);
+  });
 }

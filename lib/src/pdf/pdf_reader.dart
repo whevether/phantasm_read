@@ -8,6 +8,7 @@ import '../common/reader_brightness.dart';
 import '../common/reader_lifecycle.dart';
 import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
+import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
@@ -44,7 +45,8 @@ class PdfReader extends StatefulWidget {
     this.bookId,
     this.settings = const ReaderSettings(),
     this.initialPage = 0,
-    this.maxReadablePages,
+    this.trialLimit,
+    this.onTrialLimitReached,
     this.watermarkText,
     this.persistProgress = true,
     this.onPageChanged,
@@ -56,7 +58,8 @@ class PdfReader extends StatefulWidget {
   final String? bookId;
   final ReaderSettings settings;
   final int initialPage;
-  final int? maxReadablePages;
+  final ReaderTrialLimit? trialLimit;
+  final ReaderTrialLimitCallback? onTrialLimitReached;
   final String? watermarkText;
   final bool persistProgress;
   final ValueChanged<int>? onPageChanged;
@@ -85,9 +88,29 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   int get _itemCount {
     final total = _pages.length;
     if (total == 0) return 1;
-    final trial = widget.maxReadablePages;
-    if (trial == null || trial <= 0) return total;
-    return total < trial ? total : trial;
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return total;
+    return limit.visibleCount(total);
+  }
+
+  int _contentPageIndex(int logicalIndex) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return logicalIndex;
+    return limit.contentIndex(logicalIndex);
+  }
+
+  void _notifyTrialLimit(ReaderTrialLimitAction action, int targetIndex) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return;
+    widget.onTrialLimitReached?.call(
+      ReaderTrialLimitEvent(
+        limit: limit,
+        currentIndex: _contentPageIndex(_currentPage),
+        targetIndex: targetIndex,
+        totalCount: _pages.length,
+        action: action,
+      ),
+    );
   }
 
   @override
@@ -174,9 +197,23 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
 
   void _goToPage(int page) {
     if (_pages.isEmpty) return;
-    final trial = widget.maxReadablePages;
-    final max = trial == null ? _pages.length - 1 : (trial - 1).clamp(0, _pages.length - 1);
-    final next = page.clamp(0, max);
+    final limit = widget.trialLimit;
+    final total = _pages.length;
+    var next = page;
+    if (limit != null && limit.isActive) {
+      final contentTarget = _contentPageIndex(page.clamp(0, _itemCount - 1));
+      if (page < 0 ||
+          page >= _itemCount ||
+          !limit.isReadable(contentTarget, total)) {
+        _notifyTrialLimit(
+          ReaderTrialLimitAction.seek,
+          page < 0 ? 0 : contentTarget + 1,
+        );
+        next = limit.logicalIndex(limit.clampIndex(contentTarget, total));
+      }
+    } else {
+      next = page.clamp(0, total - 1);
+    }
     if (next == _currentPage) return;
     setState(() => _currentPage = next);
     _pageController.animateToPage(
@@ -184,7 +221,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOut,
     );
-    widget.onPageChanged?.call(next);
+    widget.onPageChanged?.call(_contentPageIndex(next));
     _save();
   }
 
@@ -226,7 +263,8 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     }
   }
 
-  Widget _buildPage(int index) {
+  Widget _buildPage(int logicalIndex) {
+    final index = _contentPageIndex(logicalIndex);
     if (index >= _pages.length) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -260,9 +298,6 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final trial = widget.maxReadablePages;
-    final trialEnded = trial != null && _currentPage >= trial;
-
     return Focus(
       autofocus: true,
       onKeyEvent: _onKey,
@@ -279,7 +314,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                   itemCount: _itemCount,
                   onPageChanged: (i) {
                     setState(() => _currentPage = i);
-                    widget.onPageChanged?.call(i);
+                    widget.onPageChanged?.call(_contentPageIndex(i));
                     _save();
                   },
                   itemBuilder: (context, index) => _buildPage(index),
@@ -292,17 +327,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
               ),
               if (widget.watermarkText != null)
                 ReaderWatermark(text: widget.watermarkText!),
-              if (trialEnded)
-                const ColoredBox(
-                  color: Color(0xCC000000),
-                  child: Center(
-                    child: Text(
-                      '试读结束',
-                      style: TextStyle(color: Colors.white, fontSize: 18),
-                    ),
-                  ),
-                ),
-              if (_settings.tapZonesEnabled && !trialEnded)
+              if (_settings.tapZonesEnabled)
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
@@ -319,6 +344,16 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                         case TapZoneAction.toggleToolbar:
                           setState(() => _toolbar = !_toolbar);
                         case TapZoneAction.next:
+                          final limit = widget.trialLimit;
+                          final content = _contentPageIndex(_currentPage);
+                          if (limit != null &&
+                              limit.atBoundary(content, _pages.length)) {
+                            _notifyTrialLimit(
+                              ReaderTrialLimitAction.next,
+                              content + 1,
+                            );
+                            return;
+                          }
                           _goToPage(_currentPage + 1);
                       }
                     },
@@ -347,8 +382,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                         child: Text(
                           _pages.isEmpty
                               ? 'PDF · loading…'
-                              : 'PDF · page ${_currentPage + 1} / ${_pages.length}'
-                                  '${trial != null ? ' · 试读 $trial 页' : ''}',
+                              : 'PDF · page ${_contentPageIndex(_currentPage) + 1} / ${_pages.length}',
                           style: const TextStyle(color: Colors.white),
                           textAlign: TextAlign.center,
                         ),
