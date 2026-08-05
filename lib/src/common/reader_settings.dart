@@ -10,25 +10,24 @@ class ReaderSettings {
     this.backgroundColor,
     this.foregroundColor,
     this.novelReadingMode = NovelReadingMode.vertical,
+    this.comicFitMode = ComicFitMode.contain,
+    this.doublePage = false,
+    this.comicBackground = 0xFF000000,
+    this.tapZonesEnabled = true,
+    this.immersive = true,
   });
 
-  /// System or overlay brightness in range `0.0`–`1.0`.
   final double brightness;
-
-  /// Whether to keep the screen awake while reading.
   final bool keepScreenOn;
-
-  /// Typography for novel (text + EPUB). Ignored by comic.
   final NovelTypography typography;
-
-  /// Optional novel theme background (ARGB int).
   final int? backgroundColor;
-
-  /// Optional novel theme foreground (ARGB int).
   final int? foregroundColor;
-
-  /// Novel layout: vertical scroll or horizontal paging.
   final NovelReadingMode novelReadingMode;
+  final ComicFitMode comicFitMode;
+  final bool doublePage;
+  final int comicBackground;
+  final bool tapZonesEnabled;
+  final bool immersive;
 
   ReaderSettings copyWith({
     double? brightness,
@@ -37,6 +36,11 @@ class ReaderSettings {
     int? backgroundColor,
     int? foregroundColor,
     NovelReadingMode? novelReadingMode,
+    ComicFitMode? comicFitMode,
+    bool? doublePage,
+    int? comicBackground,
+    bool? tapZonesEnabled,
+    bool? immersive,
     bool clearBackgroundColor = false,
     bool clearForegroundColor = false,
   }) {
@@ -49,6 +53,11 @@ class ReaderSettings {
       foregroundColor:
           clearForegroundColor ? null : (foregroundColor ?? this.foregroundColor),
       novelReadingMode: novelReadingMode ?? this.novelReadingMode,
+      comicFitMode: comicFitMode ?? this.comicFitMode,
+      doublePage: doublePage ?? this.doublePage,
+      comicBackground: comicBackground ?? this.comicBackground,
+      tapZonesEnabled: tapZonesEnabled ?? this.tapZonesEnabled,
+      immersive: immersive ?? this.immersive,
     );
   }
 }
@@ -71,5 +80,20 @@ class NovelThemePreset {
     NovelThemePreset(name: 'Sepia', background: 0xFFF4ECD8, foreground: 0xFF5B4636),
     NovelThemePreset(name: 'Green', background: 0xFFCCE8CF, foreground: 0xFF1B3A22),
     NovelThemePreset(name: 'Dark', background: 0xFF121212, foreground: 0xFFE0E0E0),
+    NovelThemePreset(name: 'AMOLED', background: 0xFF000000, foreground: 0xFFE8E8E8),
+  ];
+}
+
+/// Built-in font family choices for novel toolbar.
+class NovelFontOption {
+  const NovelFontOption(this.label, this.family);
+  final String label;
+  final String? family;
+
+  static const List<NovelFontOption> defaults = [
+    NovelFontOption('系统', null),
+    NovelFontOption('Serif', 'serif'),
+    NovelFontOption('Sans', 'sans-serif'),
+    NovelFontOption('Mono', 'monospace'),
   ];
 }

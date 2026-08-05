@@ -55,9 +55,9 @@ dependencies:
     sdk: flutter
   extended_image: 10.1.0
   webview_flutter: 4.14.1
-  screen_brightness: ^2.1.11
-  wakelock_plus: ^1.7.0
-  charset_converter: ^2.5.1   # 文本 GBK 等
+  screen_brightness: 2.1.11
+  wakelock_plus: 1.7.0
+  charset_converter: 2.5.1
 
 flutter:
   assets:

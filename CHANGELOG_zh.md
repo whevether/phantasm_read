@@ -1,18 +1,31 @@
-## 0.1.0
+## 0.0.1
 
-漫画 / 小说阅读器 package 首个版本。
+首个版本（尚未发布）。完整功能清单见 [README_zh.md](README_zh.md)。
 
-### 功能点
+### 漫画
 
-* 漫画阅读：`extended_image` 10.1.0，支持竖滑 / 横翻、双指缩放、邻页预加载、加载与失败占位
-* 小说 EPUB：离线 `epub.js` + `webview_flutter` 4.14.1（Dart ↔ JS 桥：打开、翻页、CFI、主题、字体）
-* EPUB 目录选章：`getToc` / `goToChapter`，阅读页内章节列表
-* 小说阅读方向：竖向滚动 / 横向翻页（`NovelReadingMode`）
-* 自定义小说背景 / 前景色（主题色板 + `ReaderSettings`）
-* 文本小说：支持 `.txt` / `.md` / `.html`，编码探测 UTF-8 / GBK，按标题识别章节并跳转
-* 亮度调节：优先系统亮度，不支持时半透明遮罩降级
-* 阅读不熄屏（`wakelock_plus`）
-* 小说字体调节：字号、行高、字体家族
-* 漫画与小说共用 `ReaderSettings`
-* 示例 App：漫画与文本小说演示
-* 多平台：Android、iOS、Web、macOS、Windows、Linux
+* 多图源：`ComicPages.fromFiles` / `fromUrls` / `fromBytes`；CBZ/ZIP：`ComicArchive.fromBytes`
+* 竖 / 横滑、RTL、双页、适应模式、背景色、手势缩放与双击缩放、邻页预加载
+* 进度条跳页、跳页对话框、缩略图、音量键 / 键盘、点击分区
+* 书签列表、试读 `maxReadablePages`、水印、手绘、`onSync`、亮度 / 不息屏 / 沉浸式
+
+### 小说
+
+* EPUB（离线 epub.js）+ txt / md / html；多数据源（file / asset / url / bytes）
+* 编码 UTF-8 / GBK / GB18030；章节树、搜索、书签、划线
+* 字号 / 行距 / 边距 / 字距 / 对齐 / 字体 / 主题预设；竖读 / 横读
+* TTS（文本）、自动滚屏（文本）、Media Overlay / 卡拉 OK、水印、手绘、`onSync`
+
+### PDF
+
+* `PdfReader`：`PdfSource.file` / `bytes`；WebView data URL；水印、试读遮罩、亮度 / 常亮、进度持久化
+
+### 共用
+
+* `ReaderSettings` / Store、进度 / 书签 Store（含 `exportJson`）、亮度、不息屏、点击分区、进度条
+* `PageCurl` / `CurlPageView`、`InkAnnotationLayer`、`MediaOverlayPlayer` / `AudiobookController`
+
+### 文档与示例
+
+* 中英文详细 README（含已知限制）
+* 示例：漫画 / 小说文本 / 内存 PDF

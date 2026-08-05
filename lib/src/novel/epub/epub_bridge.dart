@@ -51,6 +51,44 @@ class EpubBridge {
     );
   }
 
+  Future<List<Map<String, String>>> search(String query) async {
+    final raw = await controller.runJavaScriptReturningResult(
+      'window.epubBridge.search(${jsonEncode(query)})',
+    );
+    final text = _stringifyJsResult(raw);
+    if (text.isEmpty || text == 'null') return const [];
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map(
+            (e) => {
+              'cfi': '${e['cfi'] ?? ''}',
+              'excerpt': '${e['excerpt'] ?? ''}',
+            },
+          )
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> getLocation() async {
+    final raw = await controller.runJavaScriptReturningResult(
+      'JSON.stringify(await window.epubBridge.getLocation())',
+    );
+    final text = _stringifyJsResult(raw);
+    if (text.isEmpty || text == 'null') return null;
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> setFontSize(double fontSizePx) {
     final percent = ((fontSizePx / 18.0) * 100).clamp(50, 300).round();
     return controller.runJavaScript(

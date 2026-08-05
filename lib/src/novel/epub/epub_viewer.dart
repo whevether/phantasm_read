@@ -6,7 +6,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
-import '../file_bytes.dart';
 import '../novel_chapter.dart';
 import 'epub_bridge.dart';
 
@@ -16,22 +15,26 @@ const _assetReaderHtml = 'packages/phantasm_read/assets/epubjs/reader.html';
 class EpubViewerController {
   _EpubViewerState? _state;
 
-  Future<List<NovelChapter>> getChapters() async {
-    final state = _state;
-    if (state == null) return const [];
-    return state.getChapters();
-  }
+  Future<List<NovelChapter>> getChapters() async =>
+      _state?.getChapters() ?? const [];
 
-  Future<void> goToChapter(String href) async {
-    await _state?.goToChapter(href);
-  }
+  Future<void> goToChapter(String href) async => _state?.goToChapter(href);
+
+  Future<void> next() async => _state?.next();
+
+  Future<void> prev() async => _state?.prev();
+
+  Future<List<Map<String, String>>> search(String query) async =>
+      _state?.search(query) ?? const [];
+
+  Future<String?> currentCfi() async => _state?.currentCfi();
 }
 
 /// EPUB viewer using offline epub.js inside [webview_flutter].
 class EpubViewer extends StatefulWidget {
   const EpubViewer({
     super.key,
-    required this.filePath,
+    required this.bytes,
     required this.typography,
     this.controller,
     this.initialCfi,
@@ -44,7 +47,7 @@ class EpubViewer extends StatefulWidget {
     this.onError,
   });
 
-  final String filePath;
+  final Uint8List bytes;
   final NovelTypography typography;
   final EpubViewerController? controller;
   final String? initialCfi;
@@ -66,6 +69,7 @@ class _EpubViewerState extends State<EpubViewer> {
   String? _error;
   bool _shellReady = false;
   bool _bookOpened = false;
+  String? _cfi;
 
   String get _flow =>
       widget.readingMode == NovelReadingMode.vertical ? 'scrolled' : 'paginated';
@@ -74,11 +78,6 @@ class _EpubViewerState extends State<EpubViewer> {
   void initState() {
     super.initState();
     widget.controller?._state = this;
-    if (kIsWeb) {
-      _error =
-          'EPUB WebView path is not used on web; use the web JS interop shell.';
-      return;
-    }
     _initWebView();
   }
 
@@ -96,8 +95,21 @@ class _EpubViewerState extends State<EpubViewer> {
     return bridge.getToc();
   }
 
-  Future<void> goToChapter(String href) async {
-    await _bridge?.goToChapter(href);
+  Future<void> goToChapter(String href) async => _bridge?.goToChapter(href);
+
+  Future<void> next() async => _bridge?.next();
+
+  Future<void> prev() async => _bridge?.prev();
+
+  Future<List<Map<String, String>>> search(String query) async {
+    final bridge = _bridge;
+    if (bridge == null || !_bookOpened) return const [];
+    return bridge.search(query);
+  }
+
+  Future<String?> currentCfi() async {
+    final loc = await _bridge?.getLocation();
+    return loc?['cfi'] as String? ?? _cfi;
   }
 
   Future<void> _initWebView() async {
@@ -125,6 +137,7 @@ class _EpubViewerState extends State<EpubViewer> {
               if (payload is Map) {
                 cfi = payload['cfi'] as String?;
               }
+              _cfi = cfi;
               widget.onLocationChanged?.call(cfi);
             case 'error':
               final payload = msg.payload;
@@ -154,12 +167,18 @@ class _EpubViewerState extends State<EpubViewer> {
 
     try {
       await controller.loadFlutterAsset(_assetReaderHtml);
-    } catch (e) {
+    } catch (_) {
       try {
         await controller.loadFlutterAsset('assets/epubjs/reader.html');
       } catch (e2) {
+        // Web fallback: load HTML string with relative script tags may fail;
+        // surface clear error.
         if (mounted) {
-          setState(() => _error = 'Failed to load EPUB shell: $e2');
+          setState(() {
+            _error = kIsWeb
+                ? 'EPUB on web requires asset loading support: $e2'
+                : 'Failed to load EPUB shell: $e2';
+          });
         }
         return;
       }
@@ -171,8 +190,7 @@ class _EpubViewerState extends State<EpubViewer> {
   Future<void> _openBookIfNeeded() async {
     if (!_shellReady || _bookOpened || _bridge == null) return;
     try {
-      final bytes = await readFileBytes(widget.filePath);
-      final b64 = base64Encode(bytes);
+      final b64 = base64Encode(widget.bytes);
       await _bridge!.openFromBase64(b64, flow: _flow);
     } catch (e) {
       widget.onError?.call(e.toString());
@@ -182,8 +200,7 @@ class _EpubViewerState extends State<EpubViewer> {
 
   Future<void> _loadChapters() async {
     try {
-      final chapters = await getChapters();
-      widget.onChaptersLoaded?.call(chapters);
+      widget.onChaptersLoaded?.call(await getChapters());
     } catch (_) {
       widget.onChaptersLoaded?.call(const []);
     }
@@ -209,9 +226,7 @@ class _EpubViewerState extends State<EpubViewer> {
     final g = (c.g * 255.0).round().clamp(0, 255);
     final b = (c.b * 255.0).round().clamp(0, 255);
     final a = c.a;
-    if (a >= 1) {
-      return 'rgb($r,$g,$b)';
-    }
+    if (a >= 1) return 'rgb($r,$g,$b)';
     return 'rgba($r,$g,$b,${a.toStringAsFixed(3)})';
   }
 
@@ -230,7 +245,7 @@ class _EpubViewerState extends State<EpubViewer> {
     if (oldWidget.readingMode != widget.readingMode && _bookOpened) {
       _bridge?.setFlow(_flow).then((_) => _applyTypography());
     }
-    if (oldWidget.filePath != widget.filePath) {
+    if (oldWidget.bytes != widget.bytes) {
       _bookOpened = false;
       _openBookIfNeeded();
     }

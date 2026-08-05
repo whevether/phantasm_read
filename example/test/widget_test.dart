@@ -8,5 +8,6 @@ void main() {
     expect(find.text('phantasm_read'), findsOneWidget);
     expect(find.text('漫画阅读器'), findsOneWidget);
     expect(find.text('小说阅读器（文本）'), findsOneWidget);
+    expect(find.text('PDF 阅读器'), findsOneWidget);
   });
 }

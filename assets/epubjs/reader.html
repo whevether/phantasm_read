@@ -138,7 +138,22 @@
         if (!book) return;
         await recreateRendition();
       },
-      setFontSize(percent) {
+      async search(query) {
+    if (!book || !query) return '[]';
+    try {
+      const results = await book.search(query);
+      const mapped = (results || []).slice(0, 50).map(function (r) {
+        return {
+          cfi: r.cfi || (r.excerpt && r.excerpt.cfi) || '',
+          excerpt: (r.excerpt && (r.excerpt.cfirange || r.excerpt.excerpt || r.excerpt)) || String(r)
+        };
+      });
+      return JSON.stringify(mapped);
+    } catch (e) {
+      return '[]';
+    }
+  },
+  setFontSize(percent) {
         if (!rendition) return;
         rendition.themes.fontSize(String(percent) + '%');
       },

@@ -1,12 +1,27 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+
+import '../common/ink_annotation.dart';
 import '../common/novel_reading_mode.dart';
+import '../common/novel_typography.dart';
+import '../common/reader_bookmark.dart';
 import '../common/reader_brightness.dart';
 import '../common/reader_lifecycle.dart';
+import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
+import '../common/reader_settings_store.dart';
+import '../common/reader_sync.dart';
 import '../common/reader_wake_lock.dart';
+import '../common/reader_watermark.dart';
+import '../common/tap_zones.dart';
+import '../audio/media_overlay.dart';
 import 'epub/epub_viewer.dart';
 import 'novel_chapter.dart';
+import 'novel_search.dart';
 import 'novel_source.dart';
 import 'text/text_reader.dart';
 
@@ -15,23 +30,49 @@ class NovelReader extends StatefulWidget {
   const NovelReader({
     super.key,
     required this.source,
+    this.bookId,
     this.settings = const ReaderSettings(),
     this.encoding,
     this.initialCfi,
+    this.persistProgress = true,
+    this.persistSettings = true,
+    this.maxReadablePages,
+    this.watermarkText,
+    this.enableInk = false,
+    this.mediaOverlayCues = const [],
+    this.mediaOverlaySource,
     this.onSettingsChanged,
     this.onLocationChanged,
     this.onChaptersLoaded,
+    this.onChapterChanged,
+    this.onSessionTick,
+    this.onSync,
+    this.onKaraokeCue,
     this.showToolbar = true,
+    this.rtl = false,
   });
 
   final NovelSource source;
+  final String? bookId;
   final ReaderSettings settings;
   final String? encoding;
   final String? initialCfi;
+  final bool persistProgress;
+  final bool persistSettings;
+  final int? maxReadablePages;
+  final String? watermarkText;
+  final bool enableInk;
+  final List<MediaOverlayCue> mediaOverlayCues;
+  final Source? mediaOverlaySource;
   final ValueChanged<ReaderSettings>? onSettingsChanged;
   final ValueChanged<String?>? onLocationChanged;
   final ValueChanged<List<NovelChapter>>? onChaptersLoaded;
+  final ValueChanged<int>? onChapterChanged;
+  final ValueChanged<Duration>? onSessionTick;
+  final ReaderSyncCallback? onSync;
+  final ValueChanged<MediaOverlayCue?>? onKaraokeCue;
   final bool showToolbar;
+  final bool rtl;
 
   @override
   State<NovelReader> createState() => _NovelReaderState();
@@ -45,26 +86,134 @@ class _NovelReaderState extends State<NovelReader>
   final GlobalKey<TextReaderState> _textKey = GlobalKey<TextReaderState>();
   bool _toolbarVisible = false;
   List<NovelChapter> _chapters = const [];
+  List<ReaderBookmark> _bookmarks = const [];
+  List<ReaderHighlight> _highlights = const [];
   int? _jumpToParagraph;
+  int _paragraphIndex = 0;
+  int _chapterIndex = 0;
+  String? _cfi;
+  Uint8List? _bytes;
+  Object? _loadError;
+  bool _loading = true;
+  Timer? _autoScroll;
+  Timer? _sessionTimer;
+  DateTime? _sessionStarted;
+  FlutterTts? _tts;
+  bool _ttsSpeaking = false;
+  MediaOverlayPlayer? _overlay;
+  int? _karaokeParagraph;
+
+  String get _bookId =>
+      widget.bookId ?? 'novel_${widget.source.bytes.displayName.hashCode}';
+
+  bool get _isEpub => widget.source.format == NovelFormat.epub;
+
+  String get _kind => switch (widget.source.format) {
+        NovelFormat.text => 'text',
+        NovelFormat.markdown => 'markdown',
+        NovelFormat.html => 'html',
+        NovelFormat.epub => 'epub',
+      };
 
   @override
   void initState() {
     super.initState();
     _settings = widget.settings;
     WidgetsBinding.instance.addObserver(this);
-    _enterReading();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    if (widget.persistSettings) {
+      final saved = await ReaderSettingsStore.instance.load();
+      if (saved != null) _settings = saved;
+    }
+    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+    _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+    if (_settings.immersive) await ReaderImmersive.enter();
+    await _enterReading();
+    try {
+      _bytes = await widget.source.bytes.load();
+      final progress = widget.persistProgress
+          ? await ReaderProgressStore.instance.load(_bookId)
+          : null;
+      if (progress != null) {
+        _cfi = progress.cfi ?? widget.initialCfi;
+        _paragraphIndex = progress.paragraphIndex ?? 0;
+        _jumpToParagraph = progress.paragraphIndex;
+      } else {
+        _cfi = widget.initialCfi;
+      }
+    } catch (e) {
+      _loadError = e;
+    }
+    _sessionStarted = DateTime.now();
+    _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final s = _sessionStarted;
+      if (s != null) widget.onSessionTick?.call(DateTime.now().difference(s));
+    });
+    if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _enterReading() async {
     await _brightness.apply(_settings.brightness);
-    if (_settings.keepScreenOn) {
-      await ReaderWakeLock.enable();
+    if (_settings.keepScreenOn) await ReaderWakeLock.enable();
+    if (widget.mediaOverlaySource != null) {
+      _overlay = MediaOverlayPlayer(
+        onCueChanged: (cue) {
+          widget.onKaraokeCue?.call(cue);
+          if (cue?.paragraphIndex != null) {
+            final idx = cue!.paragraphIndex!;
+            setState(() => _karaokeParagraph = idx);
+            _textKey.currentState?.jumpToParagraph(idx);
+          }
+        },
+      );
+      await _overlay!.load(
+        source: widget.mediaOverlaySource!,
+        cues: widget.mediaOverlayCues,
+      );
     }
   }
 
   Future<void> _leaveReading() async {
+    _autoScroll?.cancel();
+    await _tts?.stop();
+    await _overlay?.dispose();
     await _brightness.restore();
     await ReaderWakeLock.disable();
+    await ReaderImmersive.leave();
+  }
+
+  Future<void> _saveProgress() async {
+    if (!widget.persistProgress) return;
+    final flat = _flatChapters;
+    final pct = flat.isEmpty
+        ? 0.0
+        : ((_chapterIndex + 1) / flat.length).clamp(0.0, 1.0);
+    final progress = ReaderProgress(
+      bookId: _bookId,
+      cfi: _cfi,
+      paragraphIndex: _paragraphIndex,
+      percentage: pct,
+    );
+    await ReaderProgressStore.instance.save(progress);
+    await ReaderSyncHub(onSync: widget.onSync).emit(
+      ReaderSyncPayload(
+        bookId: _bookId,
+        progress: progress,
+        bookmarks: _bookmarks,
+        highlights: _highlights,
+      ),
+    );
+  }
+
+  List<NovelChapter> get _flatChapters {
+    final out = <NovelChapter>[];
+    for (final c in _chapters) {
+      out.addAll(c.flattened);
+    }
+    return out;
   }
 
   @override
@@ -73,11 +222,6 @@ class _NovelReaderState extends State<NovelReader>
     if (oldWidget.settings != widget.settings) {
       _settings = widget.settings;
       _brightness.apply(_settings.brightness);
-      if (_settings.keepScreenOn) {
-        ReaderWakeLock.enable();
-      } else {
-        ReaderWakeLock.disable();
-      }
     }
   }
 
@@ -85,6 +229,7 @@ class _NovelReaderState extends State<NovelReader>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       ReaderWakeLock.disable();
+      _saveProgress();
     } else if (state == AppLifecycleState.resumed && _settings.keepScreenOn) {
       ReaderWakeLock.enable();
     }
@@ -93,6 +238,8 @@ class _NovelReaderState extends State<NovelReader>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _sessionTimer?.cancel();
+    _saveProgress();
     _leaveReading();
     _brightness.dispose();
     super.dispose();
@@ -106,74 +253,31 @@ class _NovelReaderState extends State<NovelReader>
     } else {
       ReaderWakeLock.disable();
     }
+    if (next.immersive) {
+      ReaderImmersive.enter();
+    } else {
+      ReaderImmersive.leave();
+    }
+    if (widget.persistSettings) ReaderSettingsStore.instance.save(next);
     widget.onSettingsChanged?.call(next);
   }
-
-  Color? _color(int? value) => value == null ? null : Color(value);
 
   void _onChapters(List<NovelChapter> chapters) {
     setState(() => _chapters = chapters);
     widget.onChaptersLoaded?.call(chapters);
   }
 
-  Future<void> _openChapterSheet() async {
-    final chapters = _chapters.isNotEmpty
-        ? _chapters
-        : (widget.source is NovelSourceEpub
-            ? await _epubController.getChapters()
-            : _chapters);
-    if (!mounted) return;
-    if (chapters.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂无章节目录')),
-      );
-      return;
-    }
-
-    final flat = <NovelChapter>[];
-    for (final c in chapters) {
-      flat.addAll(c.flattened);
-    }
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.6,
-            child: Column(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text('选择章节', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: flat.length,
-                    itemBuilder: (context, index) {
-                      final chapter = flat[index];
-                      return ListTile(
-                        title: Text(chapter.title),
-                        onTap: () async {
-                          Navigator.of(context).pop();
-                          await _goToChapter(chapter);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  Future<void> _goChapter(int delta) async {
+    final flat = _flatChapters;
+    if (flat.isEmpty) return;
+    final next = (_chapterIndex + delta).clamp(0, flat.length - 1);
+    _chapterIndex = next;
+    widget.onChapterChanged?.call(next);
+    await _goToChapter(flat[next]);
   }
 
   Future<void> _goToChapter(NovelChapter chapter) async {
-    if (widget.source is NovelSourceEpub) {
+    if (_isEpub) {
       if (chapter.href.isNotEmpty) {
         await _epubController.goToChapter(chapter.href);
       }
@@ -185,93 +289,438 @@ class _NovelReaderState extends State<NovelReader>
     await _textKey.currentState?.jumpToParagraph(index);
   }
 
+  Future<void> _openChapterSheet() async {
+    final chapters = _chapters.isNotEmpty
+        ? _chapters
+        : (_isEpub ? await _epubController.getChapters() : _chapters);
+    if (!mounted) return;
+    if (chapters.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无章节目录')),
+      );
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.65,
+            child: _ChapterTree(
+              chapters: chapters,
+              depth: 0,
+              onSelect: (c) async {
+                Navigator.pop(context);
+                final flat = <NovelChapter>[];
+                for (final root in chapters) {
+                  flat.addAll(root.flattened);
+                }
+                _chapterIndex = flat.indexWhere(
+                  (e) => e.title == c.title && e.href == c.href,
+                );
+                if (_chapterIndex < 0) _chapterIndex = 0;
+                widget.onChapterChanged?.call(_chapterIndex);
+                await _goToChapter(c);
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openSearch() async {
+    final controller = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setModal) {
+              return SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.7,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: TextField(
+                        controller: controller,
+                        decoration: const InputDecoration(
+                          hintText: '搜索…',
+                          suffixIcon: Icon(Icons.search),
+                        ),
+                        onSubmitted: (_) => setModal(() {}),
+                      ),
+                    ),
+                    Expanded(
+                      child: FutureBuilder<List<NovelSearchHit>>(
+                        future: _runSearch(controller.text),
+                        builder: (context, snap) {
+                          final hits = snap.data ?? const [];
+                          return ListView.builder(
+                            itemCount: hits.length,
+                            itemBuilder: (context, i) {
+                              final h = hits[i];
+                              return ListTile(
+                                title: Text(h.excerpt),
+                                subtitle: h.chapterTitle == null
+                                    ? null
+                                    : Text(h.chapterTitle!),
+                                onTap: () async {
+                                  Navigator.pop(context);
+                                  if (h.cfi != null && h.cfi!.isNotEmpty) {
+                                    await _epubController.goToChapter(h.cfi!);
+                                  } else if (h.paragraphIndex != null) {
+                                    await _textKey.currentState
+                                        ?.jumpToParagraph(h.paragraphIndex!);
+                                  }
+                                },
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<List<NovelSearchHit>> _runSearch(String q) async {
+    if (q.trim().isEmpty) return const [];
+    if (_isEpub) {
+      final raw = await _epubController.search(q);
+      return [
+        for (final m in raw)
+          NovelSearchHit(excerpt: m['excerpt'] ?? '', cfi: m['cfi']),
+      ];
+    }
+    return _textKey.currentState?.search(q, chapters: _chapters) ?? const [];
+  }
+
+  Future<void> _toggleBookmark() async {
+    final title = _isEpub
+        ? (_cfi ?? 'EPUB')
+        : 'Para ${_paragraphIndex + 1}';
+    final existing = _bookmarks.where((b) {
+      if (_isEpub) return b.cfi == _cfi;
+      return b.paragraphIndex == _paragraphIndex;
+    });
+    if (existing.isNotEmpty) {
+      await ReaderBookmarkStore.instance
+          .removeBookmark(_bookId, existing.first.id);
+    } else {
+      await ReaderBookmarkStore.instance.addBookmark(
+        ReaderBookmark(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          bookId: _bookId,
+          title: title,
+          cfi: _cfi,
+          paragraphIndex: _isEpub ? null : _paragraphIndex,
+        ),
+      );
+    }
+    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _addHighlight() async {
+    final paras = _textKey.currentState?.paragraphs;
+    final excerpt = _isEpub
+        ? (_cfi ?? '')
+        : (paras != null &&
+                _paragraphIndex >= 0 &&
+                _paragraphIndex < paras.length
+            ? paras[_paragraphIndex]
+            : '');
+    if (excerpt.isEmpty) return;
+    await ReaderBookmarkStore.instance.addHighlight(
+      ReaderHighlight(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        bookId: _bookId,
+        excerpt: excerpt.length > 120 ? excerpt.substring(0, 120) : excerpt,
+        cfi: _cfi,
+        paragraphIndex: _isEpub ? null : _paragraphIndex,
+      ),
+    );
+    _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+    if (mounted) setState(() {});
+  }
+
+  void _toggleAutoScroll() {
+    if (_autoScroll != null) {
+      _autoScroll!.cancel();
+      _autoScroll = null;
+      setState(() {});
+      return;
+    }
+    _autoScroll = Timer.periodic(const Duration(milliseconds: 40), (_) {
+      final state = _textKey.currentState;
+      // For text vertical, nudge scroll; for epub call next occasionally
+      if (_isEpub) return;
+      state?.nextPage();
+    });
+    setState(() {});
+  }
+
+  Future<void> _toggleTts() async {
+    _tts ??= FlutterTts();
+    if (_ttsSpeaking) {
+      await _tts!.stop();
+      setState(() => _ttsSpeaking = false);
+      return;
+    }
+    final paras = _textKey.currentState?.paragraphs;
+    final text = _isEpub
+        ? 'EPUB text-to-speech uses current chapter position.'
+        : (paras != null &&
+                _paragraphIndex >= 0 &&
+                _paragraphIndex < paras.length
+            ? paras[_paragraphIndex]
+            : '');
+    if (text.isEmpty) return;
+    setState(() => _ttsSpeaking = true);
+    await _tts!.speak(text);
+    _tts!.setCompletionHandler(() {
+      if (mounted) setState(() => _ttsSpeaking = false);
+    });
+  }
+
+  Future<void> _page(int delta) async {
+    if (_isEpub) {
+      if (delta > 0) {
+        await _epubController.next();
+      } else {
+        await _epubController.prev();
+      }
+      return;
+    }
+    if (delta > 0) {
+      await _textKey.currentState?.nextPage();
+    } else {
+      await _textKey.currentState?.prevPage();
+    }
+  }
+
+  void _onTapZone(TapZoneAction action) {
+    switch (action) {
+      case TapZoneAction.previous:
+        _page(-1);
+      case TapZoneAction.next:
+        _page(1);
+      case TapZoneAction.toggleToolbar:
+        if (widget.showToolbar) {
+          setState(() => _toolbarVisible = !_toolbarVisible);
+        }
+    }
+  }
+
   Widget _buildContent() {
-    final source = widget.source;
-    final bg = _color(_settings.backgroundColor);
-    final fg = _color(_settings.foregroundColor);
+    final bytes = _bytes;
+    if (bytes == null) {
+      return Center(child: Text('Load failed: $_loadError'));
+    }
+    final bg = _settings.backgroundColor == null
+        ? null
+        : Color(_settings.backgroundColor!);
+    final fg = _settings.foregroundColor == null
+        ? null
+        : Color(_settings.foregroundColor!);
     final mode = _settings.novelReadingMode;
 
-    return switch (source) {
-      NovelSourceEpub(:final path) => EpubViewer(
-          filePath: path,
-          controller: _epubController,
-          typography: _settings.typography,
-          initialCfi: widget.initialCfi,
-          readingMode: mode,
-          backgroundColor: bg,
-          foregroundColor: fg,
-          onLocationChanged: widget.onLocationChanged,
-          onChaptersLoaded: _onChapters,
-        ),
-      NovelSourceText(:final path) => TextReader(
-          key: _textKey,
-          filePath: path,
-          kind: 'text',
-          typography: _settings.typography,
-          encoding: widget.encoding,
-          readingMode: mode,
-          backgroundColor: bg,
-          foregroundColor: fg,
-          onChaptersLoaded: _onChapters,
-          jumpToParagraph: _jumpToParagraph,
-        ),
-      NovelSourceMarkdown(:final path) => TextReader(
-          key: _textKey,
-          filePath: path,
-          kind: 'markdown',
-          typography: _settings.typography,
-          encoding: widget.encoding,
-          readingMode: mode,
-          backgroundColor: bg,
-          foregroundColor: fg,
-          onChaptersLoaded: _onChapters,
-          jumpToParagraph: _jumpToParagraph,
-        ),
-      NovelSourceHtml(:final path) => TextReader(
-          key: _textKey,
-          filePath: path,
-          kind: 'html',
-          typography: _settings.typography,
-          encoding: widget.encoding,
-          readingMode: mode,
-          backgroundColor: bg,
-          foregroundColor: fg,
-          onChaptersLoaded: _onChapters,
-          jumpToParagraph: _jumpToParagraph,
-        ),
-    };
+    if (_isEpub) {
+      return EpubViewer(
+        bytes: bytes,
+        controller: _epubController,
+        typography: _settings.typography,
+        initialCfi: _cfi,
+        readingMode: mode,
+        backgroundColor: bg,
+        foregroundColor: fg,
+        onLocationChanged: (cfi) {
+          _cfi = cfi;
+          widget.onLocationChanged?.call(cfi);
+          _saveProgress();
+        },
+        onChaptersLoaded: _onChapters,
+      );
+    }
+
+    return TextReader(
+      key: _textKey,
+      bytes: bytes,
+      kind: _kind,
+      typography: _settings.typography,
+      encoding: widget.encoding,
+      readingMode: mode,
+      backgroundColor: bg,
+      foregroundColor: fg,
+      onChaptersLoaded: _onChapters,
+      jumpToParagraph: _jumpToParagraph,
+      initialParagraph: _paragraphIndex,
+      highlightParagraphs: {
+        for (final h in _highlights)
+          if (h.paragraphIndex != null) h.paragraphIndex!,
+        ?_karaokeParagraph,
+      },
+      rtl: widget.rtl,
+      onParagraphChanged: (i) {
+        _paragraphIndex = i;
+        _saveProgress();
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: _brightness,
-      builder: (context, _) {
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () {
-                if (!widget.showToolbar) return;
-                setState(() => _toolbarVisible = !_toolbarVisible);
-              },
-              child: _buildContent(),
-            ),
-            BrightnessOverlay(
-              brightness: _brightness.value,
-              mode: _brightness.mode,
-            ),
-            if (widget.showToolbar && _toolbarVisible)
-              _NovelToolbar(
-                settings: _settings,
-                hasChapters: _chapters.isNotEmpty || widget.source is NovelSourceEpub,
-                onSettingsChanged: _emitSettings,
-                onSelectChapter: _openChapterSheet,
-              ),
-          ],
-        );
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final flat = _flatChapters;
+    final progress = flat.isEmpty
+        ? (_paragraphIndex + 1) / 100.0
+        : ((_chapterIndex + 1) / flat.length).clamp(0.0, 1.0);
+
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (node, event) {
+        if (event is! KeyDownEvent) return KeyEventResult.ignored;
+        final key = event.logicalKey;
+        if (key == LogicalKeyboardKey.audioVolumeUp ||
+            key == LogicalKeyboardKey.arrowRight) {
+          _page(widget.rtl ? -1 : 1);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.audioVolumeDown ||
+            key == LogicalKeyboardKey.arrowLeft) {
+          _page(widget.rtl ? 1 : -1);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
       },
+      child: ListenableBuilder(
+        listenable: _brightness,
+        builder: (context, _) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  return GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTapUp: (d) {
+                      if (!_settings.tapZonesEnabled) {
+                        if (widget.showToolbar) {
+                          setState(
+                            () => _toolbarVisible = !_toolbarVisible,
+                          );
+                        }
+                        return;
+                      }
+                      _onTapZone(
+                        TapZoneDetector(enabled: true, rtl: widget.rtl).resolve(
+                          d.localPosition,
+                          Size(constraints.maxWidth, constraints.maxHeight),
+                        ),
+                      );
+                    },
+                    child: _buildContent(),
+                  );
+                },
+              ),
+              BrightnessOverlay(
+                brightness: _brightness.value,
+                mode: _brightness.mode,
+              ),
+              if (widget.watermarkText != null)
+                ReaderWatermark(text: widget.watermarkText!),
+              InkAnnotationLayer(enabled: widget.enableInk),
+              if (!_toolbarVisible)
+                ReaderProgressBar(
+                  progress: progress.clamp(0.0, 1.0),
+                  onSeek: (v) {
+                    final flat = _flatChapters;
+                    if (flat.isEmpty) return;
+                    final i = (v * (flat.length - 1)).round();
+                    _chapterIndex = i;
+                    _goToChapter(flat[i]);
+                  },
+                ),
+              if (widget.showToolbar && _toolbarVisible)
+                _NovelToolbar(
+                  settings: _settings,
+                  hasChapters: _chapters.isNotEmpty || _isEpub,
+                  autoScroll: _autoScroll != null,
+                  ttsOn: _ttsSpeaking,
+                  onSettingsChanged: _emitSettings,
+                  onSelectChapter: _openChapterSheet,
+                  onSearch: _openSearch,
+                  onPrevChapter: () => _goChapter(-1),
+                  onNextChapter: () => _goChapter(1),
+                  onPrevPage: () => _page(-1),
+                  onNextPage: () => _page(1),
+                  onBookmark: _toggleBookmark,
+                  onHighlight: _addHighlight,
+                  onAutoScroll: _toggleAutoScroll,
+                  onTts: _toggleTts,
+                  onOverlayPlay: _overlay == null
+                      ? null
+                      : () => _overlay!.play(),
+                  onOverlayPause: _overlay == null
+                      ? null
+                      : () => _overlay!.pause(),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ChapterTree extends StatelessWidget {
+  const _ChapterTree({
+    required this.chapters,
+    required this.depth,
+    required this.onSelect,
+  });
+
+  final List<NovelChapter> chapters;
+  final int depth;
+  final ValueChanged<NovelChapter> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        if (depth == 0)
+          const ListTile(
+            title: Text('选择章节', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        for (final c in chapters) ...[
+          ListTile(
+            contentPadding: EdgeInsets.only(left: 16.0 + depth * 16, right: 16),
+            title: Text(c.title),
+            onTap: () => onSelect(c),
+          ),
+          if (c.children.isNotEmpty)
+            _ChapterTree(
+              chapters: c.children,
+              depth: depth + 1,
+              onSelect: onSelect,
+            ),
+        ],
+      ],
     );
   }
 }
@@ -280,14 +729,40 @@ class _NovelToolbar extends StatelessWidget {
   const _NovelToolbar({
     required this.settings,
     required this.hasChapters,
+    required this.autoScroll,
+    required this.ttsOn,
     required this.onSettingsChanged,
     required this.onSelectChapter,
+    required this.onSearch,
+    required this.onPrevChapter,
+    required this.onNextChapter,
+    required this.onPrevPage,
+    required this.onNextPage,
+    required this.onBookmark,
+    required this.onHighlight,
+    required this.onAutoScroll,
+    required this.onTts,
+    this.onOverlayPlay,
+    this.onOverlayPause,
   });
 
   final ReaderSettings settings;
   final bool hasChapters;
+  final bool autoScroll;
+  final bool ttsOn;
   final ValueChanged<ReaderSettings> onSettingsChanged;
   final VoidCallback onSelectChapter;
+  final VoidCallback onSearch;
+  final VoidCallback onPrevChapter;
+  final VoidCallback onNextChapter;
+  final VoidCallback onPrevPage;
+  final VoidCallback onNextPage;
+  final VoidCallback onBookmark;
+  final VoidCallback onHighlight;
+  final VoidCallback onAutoScroll;
+  final VoidCallback onTts;
+  final VoidCallback? onOverlayPlay;
+  final VoidCallback? onOverlayPause;
 
   @override
   Widget build(BuildContext context) {
@@ -301,11 +776,49 @@ class _NovelToolbar extends StatelessWidget {
         color: Colors.black54,
         child: SafeArea(
           top: false,
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: onPrevChapter,
+                      icon: const Icon(Icons.skip_previous, color: Colors.white),
+                    ),
+                    IconButton(
+                      onPressed: onPrevPage,
+                      icon: const Icon(Icons.chevron_left, color: Colors.white),
+                    ),
+                    IconButton(
+                      onPressed: onNextPage,
+                      icon: const Icon(Icons.chevron_right, color: Colors.white),
+                    ),
+                    IconButton(
+                      onPressed: onNextChapter,
+                      icon: const Icon(Icons.skip_next, color: Colors.white),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: onSearch,
+                      icon: const Icon(Icons.search, color: Colors.white),
+                    ),
+                    if (hasChapters)
+                      IconButton(
+                        onPressed: onSelectChapter,
+                        icon: const Icon(Icons.list_alt, color: Colors.white),
+                      ),
+                    IconButton(
+                      onPressed: onBookmark,
+                      icon: const Icon(Icons.bookmark_border, color: Colors.white),
+                    ),
+                    IconButton(
+                      onPressed: onHighlight,
+                      icon: const Icon(Icons.highlight, color: Colors.white),
+                    ),
+                  ],
+                ),
                 Row(
                   children: [
                     const Icon(Icons.brightness_6, color: Colors.white, size: 18),
@@ -317,7 +830,7 @@ class _NovelToolbar extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      tooltip: '阅读方向',
+                      tooltip: '方向',
                       onPressed: () => onSettingsChanged(
                         settings.copyWith(
                           novelReadingMode: mode == NovelReadingMode.vertical
@@ -332,14 +845,35 @@ class _NovelToolbar extends StatelessWidget {
                         color: Colors.white,
                       ),
                     ),
-                    if (hasChapters)
+                    IconButton(
+                      tooltip: '自动滚屏',
+                      onPressed: onAutoScroll,
+                      icon: Icon(
+                        Icons.vertical_align_bottom,
+                        color: autoScroll ? Colors.amber : Colors.white,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '朗读',
+                      onPressed: onTts,
+                      icon: Icon(
+                        Icons.record_voice_over,
+                        color: ttsOn ? Colors.amber : Colors.white,
+                      ),
+                    ),
+                    if (onOverlayPlay != null)
                       IconButton(
-                        tooltip: '选择章节',
-                        onPressed: onSelectChapter,
-                        icon: const Icon(Icons.list_alt, color: Colors.white),
+                        tooltip: '有声播放',
+                        onPressed: onOverlayPlay,
+                        icon: const Icon(Icons.play_arrow, color: Colors.white),
+                      ),
+                    if (onOverlayPause != null)
+                      IconButton(
+                        tooltip: '有声暂停',
+                        onPressed: onOverlayPause,
+                        icon: const Icon(Icons.pause, color: Colors.white),
                       ),
                     IconButton(
-                      tooltip: 'Keep screen on',
                       onPressed: () => onSettingsChanged(
                         settings.copyWith(keepScreenOn: !settings.keepScreenOn),
                       ),
@@ -361,9 +895,7 @@ class _NovelToolbar extends StatelessWidget {
                         max: 36,
                         value: t.fontSize.clamp(12, 36),
                         onChanged: (v) => onSettingsChanged(
-                          settings.copyWith(
-                            typography: t.copyWith(fontSize: v),
-                          ),
+                          settings.copyWith(typography: t.copyWith(fontSize: v)),
                         ),
                       ),
                     ),
@@ -385,17 +917,71 @@ class _NovelToolbar extends StatelessWidget {
                         ),
                       ),
                     ),
+                    const Text('边距', style: TextStyle(color: Colors.white, fontSize: 12)),
+                    Expanded(
+                      child: Slider(
+                        min: 8,
+                        max: 40,
+                        value: t.pageMargin.clamp(8, 40),
+                        onChanged: (v) => onSettingsChanged(
+                          settings.copyWith(
+                            typography: t.copyWith(pageMargin: v),
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '背景',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.9),
-                      fontSize: 12,
+                Row(
+                  children: [
+                    const Text('字距', style: TextStyle(color: Colors.white, fontSize: 12)),
+                    Expanded(
+                      child: Slider(
+                        min: 0,
+                        max: 4,
+                        value: t.letterSpacing.clamp(0, 4),
+                        onChanged: (v) => onSettingsChanged(
+                          settings.copyWith(
+                            typography: t.copyWith(letterSpacing: v),
+                          ),
+                        ),
+                      ),
                     ),
+                    TextButton(
+                      onPressed: () => onSettingsChanged(
+                        settings.copyWith(
+                          typography: t.copyWith(
+                            textAlign: t.textAlign == TextAlignOption.left
+                                ? TextAlignOption.justify
+                                : TextAlignOption.left,
+                          ),
+                        ),
+                      ),
+                      child: Text(
+                        t.textAlign == TextAlignOption.justify ? '两端' : '左齐',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final f in NovelFontOption.defaults)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(f.label),
+                            selected: t.fontFamily == f.family,
+                            onSelected: (_) => onSettingsChanged(
+                              settings.copyWith(
+                                typography: t.copyWith(fontFamily: f.family),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -413,22 +999,12 @@ class _NovelToolbar extends StatelessWidget {
                                 foregroundColor: preset.foreground,
                               ),
                             ),
-                            borderRadius: BorderRadius.circular(16),
-                            child: Container(
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                color: Color(preset.background),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: settings.backgroundColor == preset.background
-                                      ? Colors.white
-                                      : Colors.white54,
-                                  width: settings.backgroundColor == preset.background
-                                      ? 2
-                                      : 1,
-                                ),
-                              ),
+                            child: CircleAvatar(
+                              radius: 14,
+                              backgroundColor: Color(preset.background),
+                              child: settings.backgroundColor == preset.background
+                                  ? const Icon(Icons.check, size: 14)
+                                  : null,
                             ),
                           ),
                         ),

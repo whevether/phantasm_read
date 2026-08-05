@@ -16,11 +16,12 @@ void main() {
   });
 
   test('NovelSource factories', () {
-    expect(NovelSource.epub('/a.epub'), isA<NovelSourceEpub>());
-    expect(NovelSource.text('/a.txt'), isA<NovelSourceText>());
-    expect(NovelSource.markdown('/a.md'), isA<NovelSourceMarkdown>());
-    expect(NovelSource.html('/a.html'), isA<NovelSourceHtml>());
+    expect(NovelSource.epub('/a.epub').format, NovelFormat.epub);
+    expect(NovelSource.text('/a.txt').format, NovelFormat.text);
+    expect(NovelSource.markdown('/a.md').format, NovelFormat.markdown);
+    expect(NovelSource.html('/a.html').format, NovelFormat.html);
   });
+
   test('NovelChapter fromJson', () {
     final chapter = NovelChapter.fromJson({
       'label': '第一章',
@@ -35,5 +36,20 @@ void main() {
 
   test('NovelThemePreset defaults', () {
     expect(NovelThemePreset.defaults, isNotEmpty);
+  });
+
+  test('searchParagraphs', () {
+    final hits = searchParagraphs(
+      ['hello world', 'foo bar', 'hello again'],
+      query: 'hello',
+    );
+    expect(hits.length, 2);
+  });
+
+  test('ReaderProgress json', () {
+    const p = ReaderProgress(bookId: 'b1', pageIndex: 3, percentage: 0.5);
+    final again = ReaderProgress.fromJson(p.toJson());
+    expect(again.bookId, 'b1');
+    expect(again.pageIndex, 3);
   });
 }
