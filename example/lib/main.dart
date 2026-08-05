@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
@@ -400,64 +401,38 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
   }
 }
 
-Uint8List _samplePdfBytes() {
-  const objects = <String>[
-    '1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n',
-    '2 0 obj<< /Type /Pages /Kids [3 0 R 6 0 R 8 0 R 10 0 R 12 0 R] /Count 5 >>endobj\n',
-    '3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
-    '4 0 obj<< /Length 68 >>stream\n'
-        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 1) Tj ET\n'
-        'endstream\nendobj\n',
-    '5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n',
-    '6 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents 7 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
-    '7 0 obj<< /Length 68 >>stream\n'
-        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 2) Tj ET\n'
-        'endstream\nendobj\n',
-    '8 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents 9 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
-    '9 0 obj<< /Length 68 >>stream\n'
-        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 3) Tj ET\n'
-        'endstream\nendobj\n',
-    '10 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents 11 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
-    '11 0 obj<< /Length 68 >>stream\n'
-        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 4) Tj ET\n'
-        'endstream\nendobj\n',
-    '12 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
-        '/Contents 13 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n',
-    '13 0 obj<< /Length 68 >>stream\n'
-        'BT /F1 24 Tf 72 720 Td (phantasm_read PDF page 5) Tj ET\n'
-        'endstream\nendobj\n',
-  ];
-
-  final body = StringBuffer('%PDF-1.4\n');
-  final offsets = <int>[0];
-  for (final obj in objects) {
-    offsets.add(body.length);
-    body.write(obj);
+Future<Uint8List> _samplePdfBytes() async {
+  final doc = pw.Document();
+  for (var i = 1; i <= 5; i++) {
+    doc.addPage(
+      pw.Page(
+        build: (context) => pw.Center(
+          child: pw.Text(
+            'phantasm_read PDF page $i',
+            style: pw.TextStyle(fontSize: 24),
+          ),
+        ),
+      ),
+    );
   }
-  final xref = body.length;
-  body.write('xref\n0 ${objects.length + 1}\n');
-  body.write('0000000000 65535 f \n');
-  for (var i = 1; i < offsets.length; i++) {
-    body.write('${offsets[i].toString().padLeft(10, '0')} 00000 n \n');
-  }
-  body.write(
-    'trailer<< /Size ${objects.length + 1} /Root 1 0 R >>\n'
-    'startxref\n$xref\n%%EOF\n',
-  );
-  return Uint8List.fromList(utf8.encode(body.toString()));
+  return doc.save();
 }
 
-class _PdfDemoPage extends StatelessWidget {
+class _PdfDemoPage extends StatefulWidget {
   const _PdfDemoPage({required this.options});
 
   final ExampleReaderOptions options;
 
   @override
+  State<_PdfDemoPage> createState() => _PdfDemoPageState();
+}
+
+class _PdfDemoPageState extends State<_PdfDemoPage> {
+  late final Future<Uint8List> _pdfBytes = _samplePdfBytes();
+
+  @override
   Widget build(BuildContext context) {
+    final options = widget.options;
     return AnimatedBuilder(
       animation: options,
       builder: (context, _) {
@@ -472,20 +447,36 @@ class _PdfDemoPage extends StatelessWidget {
               ),
             ],
           ),
-          body: PdfReader(
-            bookId: 'demo_pdf',
-            source: PdfSource.bytes(
-              _samplePdfBytes(),
-              name: 'phantasm_sample.pdf',
-            ),
-            trialLimit: options.pdfTrialLimit,
-            onTrialLimitReached: (event) {
-              if (!context.mounted) return;
-              handleTrialLimit(context, options.trialFeedback, event);
+          body: FutureBuilder<Uint8List>(
+            future: _pdfBytes,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError || !snapshot.hasData) {
+                return Center(
+                  child: Text('PDF sample failed: ${snapshot.error}'),
+                );
+              }
+              return PdfReader(
+                bookId: 'demo_pdf',
+                source: PdfSource.bytes(
+                  snapshot.data!,
+                  name: 'phantasm_sample.pdf',
+                ),
+                trialLimit: options.pdfTrialLimit,
+                onTrialLimitReached: (event) {
+                  if (!context.mounted) return;
+                  handleTrialLimit(context, options.trialFeedback, event);
+                },
+                watermarkText: options.pdfWatermarkText,
+                rasterDpi: options.pdfRasterDpi,
+                settings: const ReaderSettings(
+                  brightness: 0.9,
+                  keepScreenOn: true,
+                ),
+              );
             },
-            watermarkText: options.pdfWatermarkText,
-            rasterDpi: options.pdfRasterDpi,
-            settings: const ReaderSettings(brightness: 0.9, keepScreenOn: true),
           ),
         );
       },

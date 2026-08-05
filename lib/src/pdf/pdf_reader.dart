@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -154,6 +155,11 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _error = e.toString();
     }
 
+    if (mounted && _error == null && _pages.isEmpty) {
+      _error =
+          'PDF has no readable pages. On Android, use PDF 1.7+ without encryption.';
+    }
+
     if (mounted) {
       setState(() => _loading = false);
       widget.onPageChanged?.call(_currentPage);
@@ -171,8 +177,12 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       }
       if (_currentPage >= _pages.length && _pages.isNotEmpty) {
         _currentPage = _pages.length - 1;
-        _pageController.jumpToPage(_currentPage);
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(_currentPage);
+        }
       }
+    } catch (e) {
+      if (mounted) _error = e.toString();
     } finally {
       _rasterizing = false;
     }
@@ -268,25 +278,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     if (index >= _pages.length) {
       return const Center(child: CircularProgressIndicator());
     }
-    final raster = _pages[index];
-    return FutureBuilder(
-      future: raster.toImage(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        return InteractiveViewer(
-          minScale: 0.8,
-          maxScale: 4,
-          child: Center(
-            child: RawImage(
-              image: snapshot.data,
-              fit: BoxFit.contain,
-            ),
-          ),
-        );
-      },
-    );
+    return _PdfRasterPage(raster: _pages[index]);
   }
 
   @override
@@ -403,6 +395,71 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _PdfRasterPage extends StatefulWidget {
+  const _PdfRasterPage({required this.raster});
+
+  final PdfRaster raster;
+
+  @override
+  State<_PdfRasterPage> createState() => _PdfRasterPageState();
+}
+
+class _PdfRasterPageState extends State<_PdfRasterPage> {
+  ui.Image? _image;
+
+  @override
+  void initState() {
+    super.initState();
+    _decode();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PdfRasterPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.raster != widget.raster) {
+      _image?.dispose();
+      _image = null;
+      _decode();
+    }
+  }
+
+  Future<void> _decode() async {
+    final image = await widget.raster.toImage();
+    if (!mounted) {
+      image.dispose();
+      return;
+    }
+    setState(() => _image = image);
+  }
+
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    if (image == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return InteractiveViewer(
+      minScale: 0.8,
+      maxScale: 4,
+      child: Center(
+        child: ColoredBox(
+          color: Colors.white,
+          child: RawImage(
+            image: image,
+            fit: BoxFit.contain,
+          ),
+        ),
       ),
     );
   }

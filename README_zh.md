@@ -344,6 +344,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | 小说书签 / 高亮列表 UI | 可增删入库；无独立列表页（漫画有书签列表） |
 | 墨迹批注 | `enableInk` 可画；工具栏无撤销/清空入口；默认不持久化 |
 | PDF 大文件 | 逐页光栅化，页数多 / `rasterDpi` 高时内存与耗时增加 |
+| Android PDF | 系统 `PdfRenderer` 需 **PDF 1.7+**、未加密；低版本或手写 PDF 可能无法渲染 |
 | Markdown / HTML URL | 无 `*Url` 工厂（仅 file / asset） |
 | 本地文件路径 | Web 等平台上 file 源可能 `UnsupportedError`，请用 asset / url / bytes |
 | `onSync` | 仅为宿主钩子，包内不实现云上传 |

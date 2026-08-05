@@ -344,6 +344,7 @@ Notes:
 | Novel bookmark/highlight list UI | Persist yes; no list sheet (comic has bookmark list) |
 | Ink | Drawable via `enableInk`; no toolbar undo/clear; not persisted by default |
 | Large PDFs | Page rasterization; high page count / `rasterDpi` increases memory and load time |
+| Android PDF | System `PdfRenderer` requires **PDF 1.7+**, unencrypted; older/hand-written PDFs may fail |
 | Markdown / HTML URL | No `*Url` factories (file / asset only) |
 | Local file paths | May `UnsupportedError` on web — prefer asset / url / bytes |
 | `onSync` | Host hook only; no cloud upload inside the package |
