@@ -16,7 +16,7 @@ flutter run
 |------|------|
 | 漫画阅读器 | 5 张网络图；默认试读 3 页；手绘、`onSync` SnackBar、导出书签 |
 | 小说阅读器（文本） | 12 章样例 txt；默认试读 3 章；主题；导出书签 JSON（TTS 需在宿主接入 `NovelTtsEngine`） |
-| PDF 阅读器 | 在线样例 PDF（Mozilla pdf.js）；默认试读 3 页 |
+| PDF 阅读器 | `PdfSource.url` 在线样例；工具栏 / 书签 / 手绘 / 同步 / 试读（默认 3 页） |
 
 ## 示例设置
 

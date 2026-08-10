@@ -53,7 +53,7 @@ PdfReader(
 |------|---------|
 | Comic | Multi-source / CBZ, vertical & horizontal, RTL, zoom, double-page, fit, thumbs, bookmarks, trial, watermark, ink, sync hook |
 | Novel | EPUB + txt/md/html, search, nested TOC, themes, TTS, media overlay, bookmarks/highlights, watermark, ink |
-| PDF | `pdf` 3.13.0 + `printing` raster, paging, zoom, watermark, trial, progress |
+| PDF | `pdf` 3.13.0 + `printing` raster; comic-aligned toolbar / bookmarks / trial / ink / sync |
 | Shared | Settings / progress / bookmark stores, brightness, wakelock, tap zones, progress bar, JSON export, `onSync` |
 
 ---
@@ -231,29 +231,36 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF (`PdfReader`)
 
-Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium).
+Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium). Page-based features align with `ComicReader` (no novel-only TTS / chapter TOC / text search).
 
 ### Implemented
 
 | Feature | Notes |
 |---------|-------|
-| Sources | `PdfSource.file` / `PdfSource.bytes` |
-| Render | `Printing.raster` per-page bitmap; `InteractiveViewer` pinch zoom |
-| Navigation | Swipe (tap toggles toolbar only), arrow / volume keys, top progress seek |
-| Brightness / wake | `ReaderSettings.brightness`, `keepScreenOn` |
-| Watermark | `watermarkText` |
-| Trial | `trialLimit` caps readable pages + `onTrialLimitReached` (no built-in overlay) |
-| Progress | `persistProgress` stores `pageIndex` + `percentage` |
-| Callback | `onPageChanged` |
-| Tuning | `rasterDpi` (default 120) |
+| Sources | `PdfSource.file` / `PdfSource.bytes` / `PdfSource.url` |
+| Render | Per-page bitmap; `InteractiveViewer` zoom; `comicFitMode` |
+| Navigation | Vertical/horizontal, RTL, double-page; tap toggles toolbar; keys; progress seek; jump |
+| Toolbar | Brightness, mode, fit, double-page, bookmarks, thumbs, keep-awake, background |
+| Brightness / wake / immersive | `ReaderSettings` + `ReaderImmersive` |
+| Watermark / ink | `watermarkText` / `enableInk` |
+| Trial | `trialLimit` + swipe-past-end → `onTrialLimitReached` |
+| Persistence | `persistProgress` / `persistSettings` |
+| Callbacks | `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` |
+| Tuning | `rasterDpi` (default 120) · `readingMode` · `rtl` |
 
 ```dart
 PdfReader(
   bookId: 'doc_1',
-  source: PdfSource.file('/path/to/doc.pdf'),
+  source: PdfSource.url('https://example.com/doc.pdf'),
+  // or PdfSource.file(...) / PdfSource.bytes(...)
+  readingMode: ComicReadingMode.horizontal,
+  rtl: false,
   trialLimit: ReaderTrialLimit.pages(5, startPage: 0),
   onTrialLimitReached: (event) { /* host UI */ },
   watermarkText: 'CONFIDENTIAL',
+  enableInk: true,
+  persistSettings: true,
+  onSync: (payload) async { /* cloud sync */ },
   rasterDpi: 120,
 );
 ```
@@ -262,7 +269,7 @@ PdfReader(
 
 ## Trial (`ReaderTrialLimit`)
 
-All three readers use `trialLimit` for the preview window and `onTrialLimitReached` to report overflow attempts. On comic/novel, swipe overscroll at the trial edge triggers the callback (tap never pages). **The package does not show trial-end UI** — dialogs, snackbars, and overlays are up to the host.
+All three readers use `trialLimit` for the preview window and `onTrialLimitReached` to report overflow attempts. On comic/novel/PDF, swiping past the trial edge triggers the callback (tap never pages). **The package does not show trial-end UI** — dialogs, snackbars, and overlays are up to the host.
 
 ### Configuration
 
@@ -387,7 +394,7 @@ flutter run
 |-------|------|
 | Comic | Remote images, 3-page trial (default dialog feedback), ink, `onSync` snackbar, bookmark export |
 | Novel (text) | 12-chapter sample, 3-chapter trial, themes / TTS, JSON export, sync |
-| PDF | Online sample PDF (Mozilla pdf.js), 3-page trial, `onTrialLimitReached` demo |
+| PDF | `PdfSource.url` sample; full toolbar / bookmarks / ink / sync / trial demo |
 
 Example **Advanced settings** configure trial count, start page/chapter, and feedback style (dialog / SnackBar / none).
 

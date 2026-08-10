@@ -210,6 +210,30 @@ Future<void> showExampleSettingsSheet(
                   ),
                   SwitchListTile(
                     dense: true,
+                    title: const Text('手绘批注'),
+                    value: options.pdfInk,
+                    onChanged: options.setPdfInk,
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    title: const Text('同步回调 onSync'),
+                    value: options.pdfSync,
+                    onChanged: options.setPdfSync,
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    title: const Text('RTL'),
+                    value: options.pdfRtl,
+                    onChanged: options.setPdfRtl,
+                  ),
+                  SwitchListTile(
+                    dense: true,
+                    title: const Text('双页（横向）'),
+                    value: options.pdfDoublePage,
+                    onChanged: options.setPdfDoublePage,
+                  ),
+                  SwitchListTile(
+                    dense: true,
                     title: const Text('试读页数限制'),
                     value: options.pdfTrial,
                     onChanged: options.setPdfTrial,

@@ -29,9 +29,13 @@ class ExampleReaderOptions extends ChangeNotifier {
 
   // —— PDF ——
   bool pdfWatermark = false;
+  bool pdfInk = false;
   bool pdfTrial = true;
   int pdfTrialPages = 3;
   int pdfTrialStartPage = 0;
+  bool pdfSync = false;
+  bool pdfRtl = false;
+  bool pdfDoublePage = false;
   double pdfRasterDpi = 120;
 
   /// 试读触顶时示例应用的反馈方式（插件本身不展示 UI）。
@@ -127,8 +131,28 @@ class ExampleReaderOptions extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setPdfInk(bool v) {
+    pdfInk = v;
+    notifyListeners();
+  }
+
   void setPdfTrial(bool v) {
     pdfTrial = v;
+    notifyListeners();
+  }
+
+  void setPdfSync(bool v) {
+    pdfSync = v;
+    notifyListeners();
+  }
+
+  void setPdfRtl(bool v) {
+    pdfRtl = v;
+    notifyListeners();
+  }
+
+  void setPdfDoublePage(bool v) {
+    pdfDoublePage = v;
     notifyListeners();
   }
 

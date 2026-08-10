@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
@@ -104,9 +103,11 @@ class _HomePageState extends State<_HomePage> {
               ),
               if (_options.comicInk ||
                   _options.novelInk ||
+                  _options.pdfInk ||
                   _options.novelHighlight ||
                   _options.comicSync ||
-                  _options.novelSync)
+                  _options.novelSync ||
+                  _options.pdfSync)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Text(
@@ -139,8 +140,12 @@ class _HomePageState extends State<_HomePage> {
   }
 
   String get _pdfSubtitle {
-    final tags = <String>['在线 PDF', '翻页'];
+    final tags = <String>['在线 PDF', '工具栏'];
     if (_options.pdfWatermark) tags.add('水印');
+    if (_options.pdfInk) tags.add('手绘');
+    if (_options.pdfSync) tags.add('同步');
+    if (_options.pdfRtl) tags.add('RTL');
+    if (_options.pdfDoublePage) tags.add('双页');
     if (_options.pdfTrial) tags.add('试读${_options.pdfTrialPages}页');
     return tags.join(' · ');
   }
@@ -152,6 +157,8 @@ class _HomePageState extends State<_HomePage> {
     if (_options.novelHighlight) out.add('段落高亮');
     if (_options.comicSync) out.add('漫画同步');
     if (_options.novelSync) out.add('小说同步');
+    if (_options.pdfSync) out.add('PDF同步');
+    if (_options.pdfInk) out.add('PDF手绘');
     return out;
   }
 }
@@ -405,18 +412,6 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
 const _kDemoPdfUrl =
     'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf';
 
-Future<Uint8List> _loadDemoPdfBytes() async {
-  final response = await http.get(Uri.parse(_kDemoPdfUrl));
-  if (response.statusCode != 200) {
-    throw Exception('HTTP ${response.statusCode} loading $_kDemoPdfUrl');
-  }
-  final bytes = response.bodyBytes;
-  if (bytes.isEmpty) {
-    throw Exception('Empty PDF response from $_kDemoPdfUrl');
-  }
-  return bytes;
-}
-
 class _PdfDemoPage extends StatefulWidget {
   const _PdfDemoPage({required this.options});
 
@@ -427,7 +422,30 @@ class _PdfDemoPage extends StatefulWidget {
 }
 
 class _PdfDemoPageState extends State<_PdfDemoPage> {
-  late final Future<Uint8List> _pdfBytes = _loadDemoPdfBytes();
+  ReaderSettings _settings = const ReaderSettings(
+    brightness: 0.9,
+    keepScreenOn: true,
+    immersive: true,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _settings = _settings.copyWith(doublePage: widget.options.pdfDoublePage);
+    widget.options.addListener(_onOptionsChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.options.removeListener(_onOptionsChanged);
+    super.dispose();
+  }
+
+  void _onOptionsChanged() {
+    setState(() {
+      _settings = _settings.copyWith(doublePage: widget.options.pdfDoublePage);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -436,61 +454,41 @@ class _PdfDemoPageState extends State<_PdfDemoPage> {
       animation: options,
       builder: (context, _) {
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('PDF'),
-            actions: [
-              IconButton(
-                tooltip: '示例设置',
-                icon: const Icon(Icons.tune),
-                onPressed: () => showExampleSettingsSheet(context, options),
-              ),
-            ],
-          ),
-          body: FutureBuilder<Uint8List>(
-            future: _pdfBytes,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(),
-                      SizedBox(height: 16),
-                      Text('正在加载在线 PDF…'),
-                    ],
-                  ),
-                );
-              }
-              if (snapshot.hasError || !snapshot.hasData) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      '加载在线 PDF 失败:\n${snapshot.error}\n\n$_kDemoPdfUrl',
-                      textAlign: TextAlign.center,
+          // Immersive reading: hide demo AppBar so the PDF can go edge-to-edge.
+          appBar: _settings.immersive
+              ? null
+              : AppBar(
+                  title: const Text('PDF'),
+                  actions: [
+                    IconButton(
+                      tooltip: '示例设置',
+                      icon: const Icon(Icons.tune),
+                      onPressed: () =>
+                          showExampleSettingsSheet(context, options),
                     ),
-                  ),
-                );
-              }
-              return PdfReader(
-                bookId: 'demo_pdf',
-                source: PdfSource.bytes(
-                  snapshot.data!,
-                  name: 'compressed.tracemonkey-pldi-09.pdf',
+                  ],
                 ),
-                trialLimit: options.pdfTrialLimit,
-                onTrialLimitReached: (event) {
-                  if (!context.mounted) return;
-                  handleTrialLimit(context, options.trialFeedback, event);
-                },
-                watermarkText: options.pdfWatermarkText,
-                rasterDpi: options.pdfRasterDpi,
-                settings: const ReaderSettings(
-                  brightness: 0.9,
-                  keepScreenOn: true,
-                ),
-              );
+          body: PdfReader(
+            bookId: 'demo_pdf',
+            source: PdfSource.url(_kDemoPdfUrl),
+            readingMode: ComicReadingMode.horizontal,
+            rtl: options.pdfRtl,
+            trialLimit: options.pdfTrialLimit,
+            onTrialLimitReached: (event) {
+              if (!context.mounted) return;
+              handleTrialLimit(context, options.trialFeedback, event);
             },
+            watermarkText: options.pdfWatermarkText,
+            enableInk: options.pdfInk,
+            rasterDpi: options.pdfRasterDpi,
+            settings: _settings,
+            onSettingsChanged: (s) => setState(() => _settings = s),
+            onSync: options.pdfSync
+                ? (payload) async {
+                    if (!mounted) return;
+                    _showSyncSnack(context, payload);
+                  }
+                : null,
           ),
         );
       },

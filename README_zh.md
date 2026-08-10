@@ -53,7 +53,7 @@ PdfReader(
 |------|----------|
 | 漫画 | 多图源 / CBZ、竖横滑、RTL、缩放、双页、适应、缩略图、书签、试读、水印、手绘、同步回调 |
 | 小说 | EPUB + txt/md/html、搜索、嵌套目录、主题排版、TTS、Media Overlay、书签划线、水印、手绘 |
-| PDF | `pdf` 3.13.0 + `printing` 光栅化、翻页、缩放、水印、试读、进度 |
+| PDF | `pdf` 3.13.0 + `printing` 光栅化；与漫画对齐的工具栏 / 书签 / 试读 / 手绘 / 同步等 |
 | 共用 | 设置 / 进度 / 书签持久化、亮度、不息屏、点击分区、进度条、导出 JSON、`onSync` |
 
 ---
@@ -232,29 +232,36 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF（`PdfReader`）
 
-基于 **`pdf` 3.13.0** + **`printing` 5.15.0**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。
+基于 **`pdf` 3.13.0** + **`printing` 5.15.0**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。页式能力与漫画阅读器对齐（不含小说专属的 TTS / 章目录 / 正文搜索）。
 
 ### 已实现
 
 | 能力 | 说明 |
 |------|------|
-| 数据源 | `PdfSource.file` / `PdfSource.bytes` |
-| 渲染 | `Printing.raster` 逐页位图；`InteractiveViewer`  pinch 缩放 |
-| 导航 | 滑动翻页（点按只开关工具栏）、方向键 / 音量键、顶栏进度条拖拽 |
-| 亮度 / 常亮 | `ReaderSettings.brightness`、`keepScreenOn` |
-| 水印 | `watermarkText` |
-| 试读 | `trialLimit` 限制可读页 + `onTrialLimitReached` 回调（无内置遮罩） |
-| 进度 | `persistProgress` 保存 `pageIndex` 与 `percentage` |
-| 回调 | `onPageChanged` |
-| 参数 | `rasterDpi`（默认 120，可调清晰度 / 性能） |
+| 数据源 | `PdfSource.file` / `PdfSource.bytes` / `PdfSource.url` |
+| 渲染 | `Printing.raster` 逐页位图；`InteractiveViewer` 缩放；`comicFitMode` 适应 |
+| 导航 | 竖/横滑动、RTL、双页、点按只开关工具栏、方向键 / 音量键、顶栏进度条、跳页 |
+| 工具栏 | 亮度、方向、适应、双页、书签、书签列表、缩略图、不熄屏、背景色 |
+| 亮度 / 常亮 / 沉浸式 | `ReaderSettings` + `ReaderImmersive` |
+| 水印 / 手绘 | `watermarkText` / `enableInk` |
+| 试读 | `trialLimit` + 滑动越过末页回调 `onTrialLimitReached` |
+| 持久化 | `persistProgress` / `persistSettings` |
+| 回调 | `onPageChanged` · `onSettingsChanged` · `onSessionTick` · `onSync` |
+| 参数 | `rasterDpi`（默认 120）· `readingMode` · `rtl` |
 
 ```dart
 PdfReader(
   bookId: 'doc_1',
-  source: PdfSource.file('/path/to/doc.pdf'),
+  source: PdfSource.url('https://example.com/doc.pdf'),
+  // 或 PdfSource.file(...) / PdfSource.bytes(...)
+  readingMode: ComicReadingMode.horizontal,
+  rtl: false,
   trialLimit: ReaderTrialLimit.pages(5, startPage: 0),
   onTrialLimitReached: (event) { /* 宿主自定义 UI */ },
   watermarkText: 'CONFIDENTIAL',
+  enableInk: true,
+  persistSettings: true,
+  onSync: (payload) async { /* 云同步 */ },
   rasterDpi: 120,
 );
 ```
@@ -263,7 +270,7 @@ PdfReader(
 
 ## 试读（`ReaderTrialLimit`）
 
-三端统一用 `trialLimit` 描述试读窗口，用 `onTrialLimitReached` 把越界事件交给宿主。漫画/小说在试读边界继续滑动越界时触发回调（点按不翻页）。**包内不展示试读结束 UI**（弹窗、SnackBar、遮罩等由集成方实现）。
+三端统一用 `trialLimit` 描述试读窗口，用 `onTrialLimitReached` 把越界事件交给宿主。漫画/小说/PDF 在试读边界继续滑动越界时触发回调（点按不翻页）。**包内不展示试读结束 UI**（弹窗、SnackBar、遮罩等由集成方实现）。
 
 ### 配置
 
@@ -387,7 +394,7 @@ flutter run
 |------|----------|
 | 漫画阅读器 | 网络图、试读 3 页（默认弹窗反馈）、手绘、`onSync` SnackBar、导出书签 |
 | 小说阅读器（文本） | 12 章样例、试读 3 章、主题 / TTS、导出 JSON、同步 |
-| PDF 阅读器 | 在线样例 PDF（Mozilla pdf.js）、试读 3 页、`onTrialLimitReached` 演示 |
+| PDF 阅读器 | `PdfSource.url` 在线样例；完整工具栏 / 书签 / 手绘 / 同步 / 试读演示 |
 
 示例「高级设置」可配置试读页/章数、起始页/章，以及触顶反馈方式（弹窗 / SnackBar / 无）。
 
