@@ -19,6 +19,7 @@ import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
+import '../common/trial_gesture_boundary.dart';
 import '../audio/media_overlay.dart';
 import 'epub/epub_viewer.dart';
 import 'novel_chapter.dart';
@@ -107,6 +108,7 @@ class _NovelReaderState extends State<NovelReader>
   Timer? _autoScroll;
   Timer? _sessionTimer;
   DateTime? _sessionStarted;
+  final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
   bool _ttsSpeaking = false;
   MediaOverlayPlayer? _overlay;
   int? _karaokeParagraph;
@@ -284,6 +286,34 @@ class _NovelReaderState extends State<NovelReader>
         action: action,
       ),
     );
+  }
+
+  void _onTextTrialBoundary({required bool next}) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return;
+    if (next) {
+      if (!_hasMoreBeyondTrial) return;
+      _trialGesture.call(
+        widget.onTrialLimitReached,
+        limit: limit,
+        currentIndex: _chapterIndex,
+        targetIndex: _maxReadableChapterIndex + 1,
+        totalCount: _flatChapters.length,
+        action: ReaderTrialLimitAction.next,
+      );
+      return;
+    }
+    final start = limit.startIndex;
+    if (start > 0) {
+      _trialGesture.call(
+        widget.onTrialLimitReached,
+        limit: limit,
+        currentIndex: _chapterIndex,
+        targetIndex: start - 1,
+        totalCount: _flatChapters.length,
+        action: ReaderTrialLimitAction.seek,
+      );
+    }
   }
 
   int _chapterIndexForParagraph(int paragraphIndex) {
@@ -634,19 +664,6 @@ class _NovelReaderState extends State<NovelReader>
     }
   }
 
-  void _onTapZone(TapZoneAction action) {
-    switch (action) {
-      case TapZoneAction.previous:
-        _page(-1);
-      case TapZoneAction.next:
-        _page(1);
-      case TapZoneAction.toggleToolbar:
-        if (widget.showToolbar) {
-          setState(() => _toolbarVisible = !_toolbarVisible);
-        }
-    }
-  }
-
   Widget _buildContent() {
     if (_loadError != null) {
       return Center(
@@ -712,6 +729,10 @@ class _NovelReaderState extends State<NovelReader>
         _chapterIndex = _chapterIndexForParagraph(i);
         _saveProgress();
       },
+      onTrialBoundaryReached: _hasMoreBeyondTrial ||
+              (widget.trialLimit?.startIndex ?? 0) > 0
+          ? (next) => _onTextTrialBoundary(next: next)
+          : null,
     );
   }
 
@@ -753,29 +774,14 @@ class _NovelReaderState extends State<NovelReader>
           return Stack(
             fit: StackFit.expand,
             children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  return GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTapUp: (d) {
-                      if (!_settings.tapZonesEnabled) {
-                        if (widget.showToolbar) {
-                          setState(
-                            () => _toolbarVisible = !_toolbarVisible,
-                          );
-                        }
-                        return;
-                      }
-                      _onTapZone(
-                        TapZoneDetector(enabled: true, rtl: widget.rtl).resolve(
-                          d.localPosition,
-                          Size(constraints.maxWidth, constraints.maxHeight),
-                        ),
-                      );
-                    },
-                    child: _buildContent(),
-                  );
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapUp: (_) {
+                  if (widget.showToolbar) {
+                    setState(() => _toolbarVisible = !_toolbarVisible);
+                  }
                 },
+                child: _buildContent(),
               ),
               BrightnessOverlay(
                 brightness: _brightness.value,

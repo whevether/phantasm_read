@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
 import '../../common/page_curl.dart';
+import '../../common/trial_gesture_boundary.dart';
 import '../novel_chapter.dart';
 import '../novel_search.dart';
 import 'text_decoder.dart';
@@ -29,6 +30,7 @@ class TextReader extends StatefulWidget {
     this.pageTurnEffect = PageTurnEffect.curl,
     this.minParagraphIndex,
     this.maxParagraphIndex,
+    this.onTrialBoundaryReached,
   });
 
   final Uint8List bytes;
@@ -48,6 +50,10 @@ class TextReader extends StatefulWidget {
   final int? minParagraphIndex;
   final int? maxParagraphIndex;
 
+  /// Called when the user overscrolls past the trial window.
+  /// Argument is `true` for next / end, `false` for previous / start.
+  final ValueChanged<bool>? onTrialBoundaryReached;
+
   @override
   State<TextReader> createState() => TextReaderState();
 }
@@ -63,6 +69,7 @@ class TextReaderState extends State<TextReader> {
   int _currentParagraph = 0;
   Size? _layoutSize;
   bool _pagesReady = false;
+  final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
   List<String> get paragraphs => _paragraphs;
   int get currentParagraph => _currentParagraph;
@@ -125,6 +132,59 @@ class TextReaderState extends State<TextReader> {
     return _currentParagraph >= max && max < _paragraphs.length - 1;
   }
 
+  bool get _hasContentBeforeTrial {
+    final min = widget.minParagraphIndex;
+    return min != null && min > 0;
+  }
+
+  bool get _hasContentAfterTrial {
+    final max = widget.maxParagraphIndex;
+    return max != null &&
+        _paragraphs.isNotEmpty &&
+        max < _paragraphs.length - 1;
+  }
+
+  void _emitTrialBoundary(bool next) {
+    final cb = widget.onTrialBoundaryReached;
+    if (cb == null) return;
+    if (next && !_hasContentAfterTrial) return;
+    if (!next && !_hasContentBeforeTrial) return;
+    if (!_trialGesture.allow) return;
+    cb(next);
+  }
+
+  void _onHorizontalTrialSentinel() {
+    _emitTrialBoundary(true);
+    final last = _pages.length - 1;
+    if (last < 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final c = _pageController;
+      if (c != null && c.hasClients) {
+        c.jumpToPage(last);
+      }
+    });
+  }
+
+  bool _onVerticalScroll(ScrollNotification n) {
+    if (widget.onTrialBoundaryReached == null) return false;
+    if (n is! OverscrollNotification) return false;
+    final towardNext = n.overscroll > 0;
+    final towardPrev = n.overscroll < 0;
+    if (!_scrollController.hasClients) return false;
+    final pos = _scrollController.position;
+    if (towardNext &&
+        _hasContentAfterTrial &&
+        pos.pixels >= pos.maxScrollExtent - 1) {
+      _emitTrialBoundary(true);
+    } else if (towardPrev &&
+        _hasContentBeforeTrial &&
+        pos.pixels <= pos.minScrollExtent + 1) {
+      _emitTrialBoundary(false);
+    }
+    return false;
+  }
+
   Future<_TextBook> _load() async {
     final raw = await _decoder.decodeBytes(
       widget.bytes,
@@ -185,10 +245,12 @@ class TextReaderState extends State<TextReader> {
   }
 
   int _pageIndexForParagraph(int paragraphIndex) {
+    final relative =
+        (paragraphIndex - _firstReadableParagraph).clamp(0, 1 << 30);
     var count = 0;
     for (var i = 0; i < _pages.length; i++) {
       final next = count + _pages[i].length;
-      if (paragraphIndex < next) return i;
+      if (relative < next) return i;
       count = next;
     }
     return (_pages.isEmpty ? 0 : _pages.length - 1);
@@ -200,7 +262,7 @@ class TextReaderState extends State<TextReader> {
       count += _pages[i].length;
     }
     if (_paragraphs.isEmpty) return 0;
-    return count.clamp(0, _paragraphs.length - 1);
+    return (_firstReadableParagraph + count).clamp(0, _paragraphs.length - 1);
   }
 
   Future<void> jumpToParagraph(int index) async {
@@ -360,58 +422,103 @@ class TextReaderState extends State<TextReader> {
                 if (!_pagesReady || _pages.isEmpty) {
                   return const Center(child: CircularProgressIndicator());
                 }
+                final pageCount = trialPageViewCount(
+                  _pages.length,
+                  _hasContentAfterTrial,
+                );
                 return CurlPageView(
-                  key: ValueKey(Object.hash(_pages.length, _layoutSize)),
+                  key: ValueKey(Object.hash(pageCount, _layoutSize)),
                   controller: _pageController,
                   reverse: widget.rtl,
                   effect: widget.pageTurnEffect,
-                  itemCount: _pages.length,
+                  itemCount: pageCount,
                   onPageChanged: (page) {
+                    if (isTrialNextSentinel(
+                      index: page,
+                      readableCount: _pages.length,
+                      hasMoreBeyond: _hasContentAfterTrial,
+                    )) {
+                      _onHorizontalTrialSentinel();
+                      return;
+                    }
                     final p = _paragraphForPage(page);
                     _currentParagraph = p;
                     widget.onParagraphChanged?.call(p);
                   },
-                  itemBuilder: (context, index) =>
-                      _buildHorizontalPage(index, style, margin, bg),
+                  itemBuilder: (context, index) {
+                    if (isTrialNextSentinel(
+                      index: index,
+                      readableCount: _pages.length,
+                      hasMoreBeyond: _hasContentAfterTrial,
+                    )) {
+                      return ColoredBox(color: bg);
+                    }
+                    return _buildHorizontalPage(index, style, margin, bg);
+                  },
                 );
               },
             );
           }
 
-          return CustomScrollView(
-            controller: _scrollController,
-            slivers: [
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
-                sliver: SliverList.separated(
-                  itemCount: visibleCount,
-                  separatorBuilder: (_, _) =>
-                      SizedBox(height: widget.typography.fontSize * 0.8),
-                  itemBuilder: (context, index) {
-                    final paragraphIndex = visibleStart + index;
-                    final highlighted =
-                        widget.highlightParagraphs.contains(paragraphIndex);
-                    return KeyedSubtree(
-                      key: _paragraphKeys[paragraphIndex],
-                      child: Container(
-                        color: highlighted
-                            ? const Color(0x66FFEB3B)
-                            : Colors.transparent,
-                        child: SelectableText(
-                          book.paragraphs[paragraphIndex],
-                          style: style,
-                          textAlign: _align,
-                          onTap: () {
-                            _currentParagraph = paragraphIndex;
-                            widget.onParagraphChanged?.call(paragraphIndex);
-                          },
+          // Trailing spacer: scrolling onto it counts as past-trial gesture.
+          final trailHeight = _hasContentAfterTrial ? 96.0 : 0.0;
+          return NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              if (_hasContentAfterTrial &&
+                  n is ScrollUpdateNotification &&
+                  _scrollController.hasClients) {
+                final pos = _scrollController.position;
+                final trailStart = pos.maxScrollExtent - trailHeight;
+                if (pos.pixels > trailStart + 24) {
+                  _emitTrialBoundary(true);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted || !_scrollController.hasClients) return;
+                    final p = _scrollController.position;
+                    final start = (p.maxScrollExtent - trailHeight)
+                        .clamp(0.0, p.maxScrollExtent);
+                    _scrollController.jumpTo(start);
+                  });
+                }
+              }
+              return _onVerticalScroll(n);
+            },
+            child: CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
+                  sliver: SliverList.separated(
+                    itemCount: visibleCount,
+                    separatorBuilder: (_, _) =>
+                        SizedBox(height: widget.typography.fontSize * 0.8),
+                    itemBuilder: (context, index) {
+                      final paragraphIndex = visibleStart + index;
+                      final highlighted =
+                          widget.highlightParagraphs.contains(paragraphIndex);
+                      return KeyedSubtree(
+                        key: _paragraphKeys[paragraphIndex],
+                        child: Container(
+                          color: highlighted
+                              ? const Color(0x66FFEB3B)
+                              : Colors.transparent,
+                          child: SelectableText(
+                            book.paragraphs[paragraphIndex],
+                            style: style,
+                            textAlign: _align,
+                            onTap: () {
+                              _currentParagraph = paragraphIndex;
+                              widget.onParagraphChanged?.call(paragraphIndex);
+                            },
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+                if (_hasContentAfterTrial)
+                  SliverToBoxAdapter(child: SizedBox(height: trailHeight)),
+              ],
+            ),
           );
         },
       ),

@@ -26,6 +26,8 @@ class ReaderSettings {
   final ComicFitMode comicFitMode;
   final bool doublePage;
   final int comicBackground;
+  /// Legacy: comic / novel / PDF taps always toggle the toolbar only
+  /// (no tap-to-page). Kept for settings persistence compatibility.
   final bool tapZonesEnabled;
   final bool immersive;
 

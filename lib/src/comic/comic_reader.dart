@@ -18,6 +18,7 @@ import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
+import '../common/trial_gesture_boundary.dart';
 import 'comic_network_cache.dart';
 import 'comic_pages.dart';
 import 'comic_reading_mode.dart';
@@ -80,6 +81,7 @@ class _ComicReaderState extends State<ComicReader>
   List<ReaderBookmark> _bookmarks = const [];
   DateTime? _sessionStarted;
   Timer? _sessionTimer;
+  final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
   String get _bookId =>
       widget.bookId ?? 'comic_${widget.pages.length}_${widget.pages.hashCode}';
@@ -140,6 +142,39 @@ class _ComicReaderState extends State<ComicReader>
         action: action,
       ),
     );
+  }
+
+  bool get _hasMoreBeyondTrial {
+    final limit = widget.trialLimit;
+    return limit != null &&
+        limit.isActive &&
+        limit.hasMoreBeyond(widget.pages.length);
+  }
+
+  int get _pageViewCount =>
+      trialPageViewCount(_pageCount, _hasMoreBeyondTrial);
+
+  void _onTrialNextSentinel() {
+    final limit = widget.trialLimit;
+    if (limit == null || !_hasMoreBeyondTrial || _pageCount <= 0) return;
+    final lastLogical = _pageCount - 1;
+    _trialGesture.call(
+      widget.onTrialLimitReached,
+      limit: limit,
+      currentIndex: _contentPageIndex(lastLogical),
+      targetIndex: _contentPageIndex(lastLogical) + 1,
+      totalCount: widget.pages.length,
+      action: ReaderTrialLimitAction.next,
+    );
+    _currentPage = lastLogical;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final c = _pageController;
+      if (c != null && c.hasClients) {
+        c.jumpToPage(lastLogical);
+      }
+      if (mounted) setState(() {});
+    });
   }
 
   int _logicalIndexForRaw(
@@ -365,25 +400,6 @@ class _ComicReaderState extends State<ComicReader>
     _saveProgress();
   }
 
-  void _onTapZone(TapZoneAction action) {
-    switch (action) {
-      case TapZoneAction.previous:
-        _goToPage(_currentPage - 1);
-      case TapZoneAction.next:
-        final limit = widget.trialLimit;
-        final content = _contentPageIndex(_currentPage);
-        if (limit != null && limit.atBoundary(content, widget.pages.length)) {
-          _notifyTrialLimit(ReaderTrialLimitAction.next, content + 1);
-          return;
-        }
-        _goToPage(_currentPage + 1);
-      case TapZoneAction.toggleToolbar:
-        if (widget.showToolbar) {
-          setState(() => _toolbarVisible = !_toolbarVisible);
-        }
-    }
-  }
-
   BoxFit get _fit {
     switch (_settings.comicFitMode) {
       case ComicFitMode.contain:
@@ -580,51 +596,50 @@ class _ComicReaderState extends State<ComicReader>
             child: Stack(
               fit: StackFit.expand,
               children: [
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    return GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTapUp: (d) {
-                        if (!_settings.tapZonesEnabled) {
-                          if (widget.showToolbar) {
-                            setState(
-                              () => _toolbarVisible = !_toolbarVisible,
-                            );
-                          }
-                          return;
-                        }
-                        final action = TapZoneDetector(
-                          enabled: true,
-                          rtl: widget.rtl &&
-                              _mode == ComicReadingMode.horizontal,
-                        ).resolve(
-                          d.localPosition,
-                          Size(constraints.maxWidth, constraints.maxHeight),
-                        );
-                        _onTapZone(action);
-                      },
-                      child: ExtendedImageGesturePageView.builder(
-                        key: ValueKey(
-                          '${_mode.name}-${_settings.doublePage}-$_pageCount',
-                        ),
-                        itemCount: _pageCount,
-                        controller: controller,
-                        scrollDirection: _mode == ComicReadingMode.vertical
-                            ? Axis.vertical
-                            : Axis.horizontal,
-                        reverse:
-                            widget.rtl && _mode == ComicReadingMode.horizontal,
-                        onPageChanged: (index) {
-                          _currentPage = index;
-                          widget.onPageChanged?.call(_contentPageIndex(index));
-                          _precacheNeighbors(index);
-                          _saveProgress();
-                          if (mounted) setState(() {});
-                        },
-                        itemBuilder: (context, index) => _buildPage(index),
-                      ),
-                    );
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapUp: (_) {
+                    if (widget.showToolbar) {
+                      setState(() => _toolbarVisible = !_toolbarVisible);
+                    }
                   },
+                  child: ExtendedImageGesturePageView.builder(
+                    key: ValueKey(
+                      '${_mode.name}-${_settings.doublePage}-$_pageViewCount',
+                    ),
+                    itemCount: _pageViewCount,
+                    controller: controller,
+                    scrollDirection: _mode == ComicReadingMode.vertical
+                        ? Axis.vertical
+                        : Axis.horizontal,
+                    reverse:
+                        widget.rtl && _mode == ComicReadingMode.horizontal,
+                    onPageChanged: (index) {
+                      if (isTrialNextSentinel(
+                        index: index,
+                        readableCount: _pageCount,
+                        hasMoreBeyond: _hasMoreBeyondTrial,
+                      )) {
+                        _onTrialNextSentinel();
+                        return;
+                      }
+                      _currentPage = index;
+                      widget.onPageChanged?.call(_contentPageIndex(index));
+                      _precacheNeighbors(index);
+                      _saveProgress();
+                      if (mounted) setState(() {});
+                    },
+                    itemBuilder: (context, index) {
+                      if (isTrialNextSentinel(
+                        index: index,
+                        readableCount: _pageCount,
+                        hasMoreBeyond: _hasMoreBeyondTrial,
+                      )) {
+                        return const SizedBox.expand();
+                      }
+                      return _buildPage(index);
+                    },
+                  ),
                 ),
                 BrightnessOverlay(
                   brightness: _brightness.value,

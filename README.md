@@ -74,7 +74,7 @@ Powered by `extended_image` **10.1.0**.
 ### Reading & display
 
 - Modes: `ComicReadingMode.vertical` / `horizontal` (toolbar switchable)
-- RTL: `rtl` (reverses horizontal paging and tap zones)
+- RTL: `rtl` (reverses horizontal swipe direction)
 - Double-page: `ReaderSettings.doublePage` (horizontal only)
 - Fit: `ComicFitMode.contain` / `width` / `height`
 - Background: black / gray / white (`comicBackground`)
@@ -87,8 +87,8 @@ Powered by `extended_image` **10.1.0**.
 - Swipe pages; drag top `ReaderProgressBar`; jump-to-page dialog
 - Thumbnail grid jump
 - Keyboard / volume keys (reversed under RTL)
-- Tap zones: prev / toggle toolbar / next (`tapZonesEnabled`)
-- Trial: `trialLimit` + `onTrialLimitReached` (blocks out-of-range navigation and callbacks to host; **no built-in dialog/overlay**)
+- Tap anywhere: toggle toolbar only (no tap-to-page; page via swipe / keys / toolbar)
+- Trial: `trialLimit` + `onTrialLimitReached` (swipe overscroll at the trial edge callbacks to host; **no built-in dialog/overlay**)
 - Persistence: `persistProgress` → `ReaderProgressStore`
 - Callbacks: `onPageChanged`, `onSessionTick` (~30s), `onSync`
 
@@ -166,8 +166,8 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 - Vertical ↔ horizontal, brightness, keep-awake
 - Auto-scroll (**text path**), TTS, media-overlay play/pause
 - Top progress bar seeks by chapter ratio (trial-aware readable range)
-- Keyboard / volume keys; tap zones
-- Trial: `trialLimit` (counts **chapters**) + `onTrialLimitReached`; body truncation; callbacks on chapter list / search / paging overflow
+- Keyboard / volume keys; tap anywhere toggles toolbar only (page via swipe / toolbar)
+- Trial: `trialLimit` (counts **chapters**) + `onTrialLimitReached`; body truncation; swipe overscroll / chapter list / search / toolbar overflow callbacks
 - Watermark / ink: `watermarkText` / `enableInk`
 
 ### TTS & audio
@@ -239,7 +239,7 @@ Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev
 |---------|-------|
 | Sources | `PdfSource.file` / `PdfSource.bytes` |
 | Render | `Printing.raster` per-page bitmap; `InteractiveViewer` pinch zoom |
-| Navigation | Swipe, tap zones, arrow / volume keys, top progress seek |
+| Navigation | Swipe (tap toggles toolbar only), arrow / volume keys, top progress seek |
 | Brightness / wake | `ReaderSettings.brightness`, `keepScreenOn` |
 | Watermark | `watermarkText` |
 | Trial | `trialLimit` caps readable pages + `onTrialLimitReached` (no built-in overlay) |
@@ -262,7 +262,7 @@ PdfReader(
 
 ## Trial (`ReaderTrialLimit`)
 
-All three readers use `trialLimit` for the preview window and `onTrialLimitReached` to report overflow attempts. **The package does not show trial-end UI** — dialogs, snackbars, and overlays are up to the host.
+All three readers use `trialLimit` for the preview window and `onTrialLimitReached` to report overflow attempts. On comic/novel, swipe overscroll at the trial edge triggers the callback (tap never pages). **The package does not show trial-end UI** — dialogs, snackbars, and overlays are up to the host.
 
 ### Configuration
 
@@ -293,9 +293,9 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // novel
 
 | Reader | Unit | Package behavior |
 |--------|------|------------------|
-| Comic | page | Truncates `PageView`; callbacks on page next/seek/thumb overflow |
-| Novel | chapter | Truncates body paragraphs; callbacks on chapter/search/paging overflow |
-| PDF | page | Truncates `PageView`; callbacks on page next/seek overflow |
+| Comic | page | Truncates `PageView`; swipe overscroll / seek / thumb overflow callbacks (tap does not page) |
+| Novel | chapter | Truncates body paragraphs; swipe overscroll / chapter / search / toolbar overflow callbacks (tap does not page) |
+| PDF | page | Truncates `PageView`; swipe past trial end / seek overflow callbacks (tap does not page) |
 
 Legacy helpers: `trialPageCount` · `clampTrialPage` · `trialLimited` · `atTrialEnd`.
 
@@ -324,7 +324,7 @@ Notes:
 
 | API | Role |
 |-----|------|
-| `ReaderSettings` | Brightness, keep-awake, novel typography/colors/mode, comic fit/double-page/bg, tap zones, immersive |
+| `ReaderSettings` | Brightness, keep-awake, novel typography/colors/mode, comic fit/double-page/bg, `tapZonesEnabled` (PDF), immersive |
 | `ReaderSettingsStore` | SharedPreferences persistence |
 | `NovelTypography` | Size, line height, font, letter spacing, align, margins |
 | `NovelThemePreset` / `NovelFontOption` | Theme & font presets |
@@ -344,7 +344,7 @@ Notes:
 | `ReaderBrightness` / `BrightnessOverlay` | System brightness with overlay fallback |
 | `ReaderWakeLock` | `wakelock_plus` |
 | `ReaderImmersive` | Immersive system UI |
-| `TapZoneDetector` / `TapZoneAction` | Prev / toolbar / next (RTL aware) |
+| `TapZoneDetector` / `TapZoneAction` | Legacy helpers; comic / novel / PDF taps toggle toolbar only |
 | `ReaderProgressBar` | Top progress bar |
 | `ReaderWatermark` | Watermark overlay |
 | `ReaderTrialLimit` / `ReaderTrialLimitEvent` / `onTrialLimitReached` | Trial window + overflow callback |
@@ -387,7 +387,7 @@ flutter run
 |-------|------|
 | Comic | Remote images, 3-page trial (default dialog feedback), ink, `onSync` snackbar, bookmark export |
 | Novel (text) | 12-chapter sample, 3-chapter trial, themes / TTS, JSON export, sync |
-| PDF | 5-page in-memory sample, 3-page trial, `onTrialLimitReached` demo |
+| PDF | Online sample PDF (Mozilla pdf.js), 3-page trial, `onTrialLimitReached` demo |
 
 Example **Advanced settings** configure trial count, start page/chapter, and feedback style (dialog / SnackBar / none).
 

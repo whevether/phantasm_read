@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:pdf/widgets.dart' as pw;
+import 'package:http/http.dart' as http;
 import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
@@ -139,7 +139,7 @@ class _HomePageState extends State<_HomePage> {
   }
 
   String get _pdfSubtitle {
-    final tags = <String>['pdf 3.13', '翻页'];
+    final tags = <String>['在线 PDF', '翻页'];
     if (_options.pdfWatermark) tags.add('水印');
     if (_options.pdfTrial) tags.add('试读${_options.pdfTrialPages}页');
     return tags.join(' · ');
@@ -401,21 +401,20 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
   }
 }
 
-Future<Uint8List> _samplePdfBytes() async {
-  final doc = pw.Document();
-  for (var i = 1; i <= 5; i++) {
-    doc.addPage(
-      pw.Page(
-        build: (context) => pw.Center(
-          child: pw.Text(
-            'phantasm_read PDF page $i',
-            style: pw.TextStyle(fontSize: 24),
-          ),
-        ),
-      ),
-    );
+/// Public multi-page sample used by the PDF demo (Mozilla pdf.js).
+const _kDemoPdfUrl =
+    'https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf';
+
+Future<Uint8List> _loadDemoPdfBytes() async {
+  final response = await http.get(Uri.parse(_kDemoPdfUrl));
+  if (response.statusCode != 200) {
+    throw Exception('HTTP ${response.statusCode} loading $_kDemoPdfUrl');
   }
-  return doc.save();
+  final bytes = response.bodyBytes;
+  if (bytes.isEmpty) {
+    throw Exception('Empty PDF response from $_kDemoPdfUrl');
+  }
+  return bytes;
 }
 
 class _PdfDemoPage extends StatefulWidget {
@@ -428,7 +427,7 @@ class _PdfDemoPage extends StatefulWidget {
 }
 
 class _PdfDemoPageState extends State<_PdfDemoPage> {
-  late final Future<Uint8List> _pdfBytes = _samplePdfBytes();
+  late final Future<Uint8List> _pdfBytes = _loadDemoPdfBytes();
 
   @override
   Widget build(BuildContext context) {
@@ -451,18 +450,33 @@ class _PdfDemoPageState extends State<_PdfDemoPage> {
             future: _pdfBytes,
             builder: (context, snapshot) {
               if (snapshot.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
+                return const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('正在加载在线 PDF…'),
+                    ],
+                  ),
+                );
               }
               if (snapshot.hasError || !snapshot.hasData) {
                 return Center(
-                  child: Text('PDF sample failed: ${snapshot.error}'),
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      '加载在线 PDF 失败:\n${snapshot.error}\n\n$_kDemoPdfUrl',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 );
               }
               return PdfReader(
                 bookId: 'demo_pdf',
                 source: PdfSource.bytes(
                   snapshot.data!,
-                  name: 'phantasm_sample.pdf',
+                  name: 'compressed.tracemonkey-pldi-09.pdf',
                 ),
                 trialLimit: options.pdfTrialLimit,
                 onTrialLimitReached: (event) {

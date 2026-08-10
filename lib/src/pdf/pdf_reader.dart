@@ -13,6 +13,7 @@ import '../common/reader_trial_limit.dart';
 import '../common/reader_wake_lock.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
+import '../common/trial_gesture_boundary.dart';
 import '../novel/file_bytes.dart';
 
 /// PDF document source.
@@ -83,6 +84,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   bool _loading = true;
   bool _rasterizing = false;
   String? _error;
+  final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
   String get _bookId => widget.bookId ?? 'pdf_${widget.source.hashCode}';
 
@@ -93,6 +95,17 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     if (limit == null || !limit.isActive) return total;
     return limit.visibleCount(total);
   }
+
+  bool get _hasMoreBeyondTrial {
+    final limit = widget.trialLimit;
+    return limit != null &&
+        limit.isActive &&
+        _pages.isNotEmpty &&
+        limit.hasMoreBeyond(_pages.length);
+  }
+
+  int get _pageViewCount =>
+      trialPageViewCount(_itemCount, _hasMoreBeyondTrial);
 
   int _contentPageIndex(int logicalIndex) {
     final limit = widget.trialLimit;
@@ -112,6 +125,28 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
         action: action,
       ),
     );
+  }
+
+  void _onTrialNextSentinel() {
+    final limit = widget.trialLimit;
+    if (limit == null || !_hasMoreBeyondTrial || _itemCount <= 0) return;
+    final lastLogical = _itemCount - 1;
+    _trialGesture.call(
+      widget.onTrialLimitReached,
+      limit: limit,
+      currentIndex: _contentPageIndex(lastLogical),
+      targetIndex: _contentPageIndex(lastLogical) + 1,
+      totalCount: _pages.length,
+      action: ReaderTrialLimitAction.next,
+    );
+    _currentPage = lastLogical;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(lastLogical);
+      }
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -301,15 +336,40 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
             children: [
               ColoredBox(color: Color(_settings.comicBackground)),
               if (_pages.isNotEmpty)
-                PageView.builder(
-                  controller: _pageController,
-                  itemCount: _itemCount,
-                  onPageChanged: (i) {
-                    setState(() => _currentPage = i);
-                    widget.onPageChanged?.call(_contentPageIndex(i));
-                    _save();
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapUp: (_) {
+                    if (widget.showToolbar) {
+                      setState(() => _toolbar = !_toolbar);
+                    }
                   },
-                  itemBuilder: (context, index) => _buildPage(index),
+                  child: PageView.builder(
+                    controller: _pageController,
+                    itemCount: _pageViewCount,
+                    onPageChanged: (i) {
+                      if (isTrialNextSentinel(
+                        index: i,
+                        readableCount: _itemCount,
+                        hasMoreBeyond: _hasMoreBeyondTrial,
+                      )) {
+                        _onTrialNextSentinel();
+                        return;
+                      }
+                      setState(() => _currentPage = i);
+                      widget.onPageChanged?.call(_contentPageIndex(i));
+                      _save();
+                    },
+                    itemBuilder: (context, index) {
+                      if (isTrialNextSentinel(
+                        index: index,
+                        readableCount: _itemCount,
+                        hasMoreBeyond: _hasMoreBeyondTrial,
+                      )) {
+                        return const SizedBox.expand();
+                      }
+                      return _buildPage(index);
+                    },
+                  ),
                 )
               else
                 const Center(child: Text('Empty PDF')),
@@ -319,42 +379,10 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
               ),
               if (widget.watermarkText != null)
                 ReaderWatermark(text: widget.watermarkText!),
-              if (_settings.tapZonesEnabled)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTapUp: (d) {
-                      final box = context.findRenderObject() as RenderBox?;
-                      if (box == null) return;
-                      final action = TapZoneDetector(enabled: true).resolve(
-                        d.localPosition,
-                        box.size,
-                      );
-                      switch (action) {
-                        case TapZoneAction.previous:
-                          _goToPage(_currentPage - 1);
-                        case TapZoneAction.toggleToolbar:
-                          setState(() => _toolbar = !_toolbar);
-                        case TapZoneAction.next:
-                          final limit = widget.trialLimit;
-                          final content = _contentPageIndex(_currentPage);
-                          if (limit != null &&
-                              limit.atBoundary(content, _pages.length)) {
-                            _notifyTrialLimit(
-                              ReaderTrialLimitAction.next,
-                              content + 1,
-                            );
-                            return;
-                          }
-                          _goToPage(_currentPage + 1);
-                      }
-                    },
-                  ),
-                ),
               if (widget.showToolbar)
                 Positioned(
                   right: 12,
-                  bottom: 24,
+                  bottom: 24 + MediaQuery.viewPaddingOf(context).bottom,
                   child: FloatingActionButton.small(
                     onPressed: () => setState(() => _toolbar = !_toolbar),
                     child: Icon(_toolbar ? Icons.close : Icons.menu),

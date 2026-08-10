@@ -74,7 +74,7 @@ PdfReader(
 ### 阅读与显示
 
 - 阅读方向：`ComicReadingMode.vertical` / `horizontal`（工具栏可切换）
-- 右到左：`rtl`（横向翻页方向与点击区对调）
+- 右到左：`rtl`（横向滑动翻页方向对调）
 - 双页并排：`ReaderSettings.doublePage`（横向模式）
 - 适应模式：`ComicFitMode.contain` / `width` / `height`
 - 漫画背景色：黑 / 灰 / 白（`comicBackground`）
@@ -87,8 +87,8 @@ PdfReader(
 - 滑动翻页；顶栏进度条拖拽跳页；「跳页」对话框输入页码
 - 缩略图网格跳页
 - 键盘方向键 / 音量键翻页（RTL 时方向反向）
-- 点击分区：左翻 / 中显隐工具栏 / 右翻（`tapZonesEnabled`）
-- 试读：`trialLimit` + `onTrialLimitReached`（插件拦截越界并回调；**不内置弹窗/遮罩**，UI 由宿主处理）
+- 任意点按：仅显隐工具栏（不点按翻页；翻页靠滑动 / 按键 / 工具栏）
+- 试读：`trialLimit` + `onTrialLimitReached`（试读边界继续滑动越界时回调宿主；**不内置弹窗/遮罩**，UI 由宿主处理）
 - 进度持久化：`persistProgress` → `ReaderProgressStore`
 - 回调：`onPageChanged`、`onSessionTick`（约 30s）、`onSync`
 
@@ -166,8 +166,8 @@ ComicReader(
 - 竖读 ↔ 横读切换、亮度、不熄屏
 - 自动滚屏（**文本路径**）、TTS、Media Overlay 播放 / 暂停
 - 顶栏进度条按章节比例跳转（试读时按可读章节范围）
-- 键盘 / 音量键翻页；点击分区翻页或调出工具栏
-- 试读：`trialLimit`（按**章**计数）+ `onTrialLimitReached`；正文截断、目录/搜索/翻章越界时回调宿主
+- 键盘 / 音量键翻页；任意点按只显隐工具栏（翻页靠滑动 / 工具栏）
+- 试读：`trialLimit`（按**章**计数）+ `onTrialLimitReached`；正文截断；滑动越界 / 目录 / 搜索 / 工具栏翻章越界时回调宿主
 - 水印、手绘：`watermarkText` / `enableInk`
 
 ### TTS 与有声
@@ -240,7 +240,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 |------|------|
 | 数据源 | `PdfSource.file` / `PdfSource.bytes` |
 | 渲染 | `Printing.raster` 逐页位图；`InteractiveViewer`  pinch 缩放 |
-| 导航 | 滑动翻页、点击分区、方向键 / 音量键、顶栏进度条拖拽 |
+| 导航 | 滑动翻页（点按只开关工具栏）、方向键 / 音量键、顶栏进度条拖拽 |
 | 亮度 / 常亮 | `ReaderSettings.brightness`、`keepScreenOn` |
 | 水印 | `watermarkText` |
 | 试读 | `trialLimit` 限制可读页 + `onTrialLimitReached` 回调（无内置遮罩） |
@@ -263,7 +263,7 @@ PdfReader(
 
 ## 试读（`ReaderTrialLimit`）
 
-三端统一用 `trialLimit` 描述试读窗口，用 `onTrialLimitReached` 把越界事件交给宿主。**包内不展示试读结束 UI**（弹窗、SnackBar、遮罩等由集成方实现）。
+三端统一用 `trialLimit` 描述试读窗口，用 `onTrialLimitReached` 把越界事件交给宿主。漫画/小说在试读边界继续滑动越界时触发回调（点按不翻页）。**包内不展示试读结束 UI**（弹窗、SnackBar、遮罩等由集成方实现）。
 
 ### 配置
 
@@ -294,9 +294,9 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 
 | 模块 | 试读单位 | 插件行为 |
 |------|----------|----------|
-| 漫画 | 页 | 截断 `PageView`；翻页 / 跳页 / 缩略图越界时回调 |
-| 小说 | 章 | 截断正文段落；翻章 / 目录 / 搜索 / 翻页越界时回调 |
-| PDF | 页 | 截断 `PageView`；翻页 / 跳页越界时回调 |
+| 漫画 | 页 | 截断 `PageView`；滑动越界 / 跳页 / 缩略图越界时回调（点按不翻页） |
+| 小说 | 章 | 截断正文段落；滑动越界 / 目录 / 搜索 / 工具栏翻章越界时回调（点按不翻页） |
+| PDF | 页 | 截断 `PageView`；滑动越过试读末页 / 跳页越界时回调（点按不翻页） |
 
 辅助函数（兼容旧写法）：`trialPageCount` · `clampTrialPage` · `trialLimited` · `atTrialEnd`。
 
@@ -324,7 +324,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 
 | API | 说明 |
 |-----|------|
-| `ReaderSettings` | 亮度、不熄屏、小说排版、前/背景色、小说方向、漫画适应/双页/背景、点击区、沉浸式 |
+| `ReaderSettings` | 亮度、不熄屏、小说排版、前/背景色、小说方向、漫画适应/双页/背景、`tapZonesEnabled`（PDF）、沉浸式 |
 | `ReaderSettingsStore` | SharedPreferences 全局持久化（`persistSettings`） |
 | `NovelTypography` | 字号、行高、字体、字距、对齐、页边距 |
 | `NovelThemePreset` / `NovelFontOption` | 主题与字体预设 |
@@ -344,7 +344,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | `ReaderBrightness` / `BrightnessOverlay` | 系统亮度；失败时用遮罩降亮度 |
 | `ReaderWakeLock` | `wakelock_plus` 不息屏 |
 | `ReaderImmersive` | 沉浸式系统栏 |
-| `TapZoneDetector` / `TapZoneAction` | 左翻 / 中工具栏 / 右翻（含 RTL） |
+| `TapZoneDetector` / `TapZoneAction` | 兼容辅助；漫画 / 小说 / PDF 点按一律只开关工具栏 |
 | `ReaderProgressBar` | 顶栏进度条 |
 | `ReaderWatermark` | 水印叠加 |
 | `ReaderTrialLimit` / `ReaderTrialLimitEvent` / `onTrialLimitReached` | 试读窗口与越界回调 |
@@ -387,7 +387,7 @@ flutter run
 |------|----------|
 | 漫画阅读器 | 网络图、试读 3 页（默认弹窗反馈）、手绘、`onSync` SnackBar、导出书签 |
 | 小说阅读器（文本） | 12 章样例、试读 3 章、主题 / TTS、导出 JSON、同步 |
-| PDF 阅读器 | 5 页样例 PDF、试读 3 页、`onTrialLimitReached` 演示 |
+| PDF 阅读器 | 在线样例 PDF（Mozilla pdf.js）、试读 3 页、`onTrialLimitReached` 演示 |
 
 示例「高级设置」可配置试读页/章数、起始页/章，以及触顶反馈方式（弹窗 / SnackBar / 无）。
 
