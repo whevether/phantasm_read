@@ -1,6 +1,6 @@
 name: phantasm_read
 description: Cross-platform Flutter comic and novel reader package.
-version: 0.0.1
+version: 0.0.2
 homepage: https://github.com/phantasm/phantasm_read
 license: MIT
 

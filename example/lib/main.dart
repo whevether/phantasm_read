@@ -54,7 +54,7 @@ class _HomePageState extends State<_HomePage> {
           body: ListView(
             children: [
               const ListTile(
-                title: Text('0.0.1 演示'),
+                title: Text('0.0.2 演示'),
                 subtitle: Text('常用功能默认开启 · 扩展能力见下方设置'),
               ),
               ListTile(

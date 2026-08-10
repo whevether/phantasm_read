@@ -1,3 +1,9 @@
+## 0.0.2
+
+* Comic / novel / PDF: tap toggles toolbar only; trial end via swipe sentinel page
+* PDF: comic-aligned toolbar, bookmarks, thumbs, ink, sync, RTL, double-page, immersive, `PdfSource.url`
+* PDF FAB safe-area inset; example loads online demo PDF
+
 ## 0.0.1
 Full feature list: [README.md](README.md).
 
