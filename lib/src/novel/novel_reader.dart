@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import '../audio/novel_tts.dart';
 import '../common/ink_annotation.dart';
@@ -365,8 +365,11 @@ class _NovelReaderState extends State<NovelReader>
   }
 
   void _emitSettings(ReaderSettings next) {
+    final brightnessChanged = next.brightness != _settings.brightness;
     setState(() => _settings = next);
-    _brightness.apply(next.brightness);
+    if (brightnessChanged) {
+      _brightness.apply(next.brightness);
+    }
     if (next.keepScreenOn) {
       ReaderWakeLock.enable();
     } else {
@@ -379,6 +382,16 @@ class _NovelReaderState extends State<NovelReader>
     }
     if (widget.persistSettings) ReaderSettingsStore.instance.save(next);
     widget.onSettingsChanged?.call(next);
+  }
+
+  void _onFontSizeChanged(double fontSize) {
+    _emitSettings(
+      _settings.copyWith(
+        typography: _settings.typography.copyWith(
+          fontSize: fontSize.clamp(12, 36),
+        ),
+      ),
+    );
   }
 
   void _onChapters(List<NovelChapter> chapters) {
@@ -700,6 +713,7 @@ class _NovelReaderState extends State<NovelReader>
           _saveProgress();
         },
         onChaptersLoaded: _onChapters,
+        onFontSizeChanged: _onFontSizeChanged,
       );
     }
 
@@ -733,6 +747,7 @@ class _NovelReaderState extends State<NovelReader>
               (widget.trialLimit?.startIndex ?? 0) > 0
           ? (next) => _onTextTrialBoundary(next: next)
           : null,
+      onFontSizeChanged: _onFontSizeChanged,
     );
   }
 

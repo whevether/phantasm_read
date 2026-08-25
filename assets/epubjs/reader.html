@@ -18,6 +18,50 @@
     let book = null;
     let rendition = null;
     let currentFlow = 'paginated';
+    let fontSizePercent = 100;
+    let lastPinchDistance = 0;
+
+    function pinchDistance(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function applyFontSizePercent() {
+      if (!rendition) return;
+      rendition.themes.fontSize(String(fontSizePercent) + '%');
+      post('fontSizeChanged', { percent: fontSizePercent });
+    }
+
+    function bindFontPinch() {
+      const root = document.body;
+
+      root.addEventListener('touchstart', function (e) {
+        if (e.touches.length === 2) {
+          lastPinchDistance = pinchDistance(e.touches);
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      root.addEventListener('touchmove', function (e) {
+        if (e.touches.length === 2) {
+          const dist = pinchDistance(e.touches);
+          if (lastPinchDistance > 0) {
+            const ratio = dist / lastPinchDistance;
+            fontSizePercent = Math.min(300, Math.max(50, fontSizePercent * ratio));
+            applyFontSizePercent();
+          }
+          lastPinchDistance = dist;
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      root.addEventListener('touchend', function (e) {
+        if (e.touches.length < 2) lastPinchDistance = 0;
+      }, { passive: false });
+    }
+
+    bindFontPinch();
 
     function post(type, payload) {
       try {
@@ -155,6 +199,7 @@
   },
   setFontSize(percent) {
         if (!rendition) return;
+        fontSizePercent = percent;
         rendition.themes.fontSize(String(percent) + '%');
       },
       setFontFamily(family) {

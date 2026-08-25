@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:extended_image/extended_image.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 import '../common/ink_annotation.dart';
@@ -340,6 +340,7 @@ class _ComicReaderState extends State<ComicReader>
   void _emitSettings(ReaderSettings next) {
     final wasDouble = _doublePageActive;
     final enablingDouble = next.doublePage && !_settings.doublePage;
+    final brightnessChanged = next.brightness != _settings.brightness;
     var nextMode = _mode;
     if (enablingDouble && _mode == ComicReadingMode.vertical) {
       nextMode = ComicReadingMode.horizontal;
@@ -357,7 +358,9 @@ class _ComicReaderState extends State<ComicReader>
     if (wasDouble != _doublePageActive) {
       _syncPageIndexAfterLayoutChange();
     }
-    _brightness.apply(next.brightness);
+    if (brightnessChanged) {
+      _brightness.apply(next.brightness);
+    }
     if (next.keepScreenOn) {
       ReaderWakeLock.enable();
     } else {

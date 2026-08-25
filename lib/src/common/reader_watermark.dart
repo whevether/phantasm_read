@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Semi-transparent watermark overlay for trial / DRM-style marking.
 class ReaderWatermark extends StatelessWidget {

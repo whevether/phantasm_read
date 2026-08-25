@@ -1,3 +1,9 @@
+## 0.0.3
+
+* Migrate UI imports to standalone `material_ui` (^1.0.1); require Flutter >=3.44 / Dart 3.12+
+* Gesture zoom: comic supports pinch + double-tap (`ExtendedImage` 1x–4x); novel pinch adjusts font size (text via `ReaderFontPinchGesture`, EPUB via epub.js); PDF keeps `InteractiveViewer` 0.8x–4x
+* Web: skip `screen_brightness` (unsupported) and use overlay dimming; avoid re-applying brightness on font-only setting changes
+
 ## 0.0.2
 
 * Comic / novel / PDF: tap toggles toolbar only; trial end via swipe sentinel page

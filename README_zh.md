@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.2`）。
+跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.3`）。
 
 [English](README.md)
 
@@ -12,7 +12,7 @@
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.2
+  phantasm_read: ^0.0.3
 ```
 
 许可证：[MIT](LICENSE)

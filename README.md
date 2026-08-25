@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-Cross-platform Flutter comic / novel / PDF reader package (`0.0.2`).
+Cross-platform Flutter comic / novel / PDF reader package (`0.0.3`).
 
 [中文文档](README_zh.md)
 
@@ -12,7 +12,7 @@ Cross-platform Flutter comic / novel / PDF reader package (`0.0.2`).
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.2
+  phantasm_read: ^0.0.3
 ```
 
 License: [MIT](LICENSE)

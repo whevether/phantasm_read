@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:printing/printing.dart';
@@ -352,6 +352,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   void _emitSettings(ReaderSettings next) {
     final wasDouble = _doublePageActive;
     final enablingDouble = next.doublePage && !_settings.doublePage;
+    final brightnessChanged = next.brightness != _settings.brightness;
     final content = _contentPageIndex(_currentPage);
     var nextMode = _mode;
     if (enablingDouble && _mode == ComicReadingMode.vertical) {
@@ -362,7 +363,9 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _mode = nextMode;
       _currentPage = _logicalIndexForContent(content);
     });
-    _brightness.apply(next.brightness);
+    if (brightnessChanged) {
+      _brightness.apply(next.brightness);
+    }
     if (next.keepScreenOn) {
       ReaderWakeLock.enable();
     } else {

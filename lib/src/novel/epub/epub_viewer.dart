@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../common/novel_reading_mode.dart';
@@ -45,6 +45,7 @@ class EpubViewer extends StatefulWidget {
     this.onChaptersLoaded,
     this.onReady,
     this.onError,
+    this.onFontSizeChanged,
   });
 
   final Uint8List bytes;
@@ -58,6 +59,7 @@ class EpubViewer extends StatefulWidget {
   final ValueChanged<List<NovelChapter>>? onChaptersLoaded;
   final VoidCallback? onReady;
   final ValueChanged<String>? onError;
+  final ValueChanged<double>? onFontSizeChanged;
 
   @override
   State<EpubViewer> createState() => _EpubViewerState();
@@ -139,6 +141,15 @@ class _EpubViewerState extends State<EpubViewer> {
               }
               _cfi = cfi;
               widget.onLocationChanged?.call(cfi);
+            case 'fontSizeChanged':
+              final payload = msg.payload;
+              if (payload is Map) {
+                final percent = payload['percent'];
+                if (percent is num) {
+                  final px = (percent / 100.0) * 18.0;
+                  widget.onFontSizeChanged?.call(px.clamp(12.0, 36.0));
+                }
+              }
             case 'error':
               final payload = msg.payload;
               final text = payload is Map

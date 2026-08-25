@@ -1,10 +1,11 @@
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
 import '../../common/page_curl.dart';
+import '../../common/reader_font_pinch.dart';
 import '../../common/trial_gesture_boundary.dart';
 import '../novel_chapter.dart';
 import '../novel_search.dart';
@@ -31,6 +32,7 @@ class TextReader extends StatefulWidget {
     this.minParagraphIndex,
     this.maxParagraphIndex,
     this.onTrialBoundaryReached,
+    this.onFontSizeChanged,
   });
 
   final Uint8List bytes;
@@ -53,6 +55,7 @@ class TextReader extends StatefulWidget {
   /// Called when the user overscrolls past the trial window.
   /// Argument is `true` for next / end, `false` for previous / start.
   final ValueChanged<bool>? onTrialBoundaryReached;
+  final ValueChanged<double>? onFontSizeChanged;
 
   @override
   State<TextReader> createState() => TextReaderState();
@@ -384,6 +387,16 @@ class TextReaderState extends State<TextReader> {
     );
   }
 
+  Widget _wrapFontPinch(Widget child) {
+    final onChanged = widget.onFontSizeChanged;
+    if (onChanged == null) return child;
+    return ReaderFontPinchGesture(
+      fontSize: widget.typography.fontSize,
+      onFontSizeChanged: onChanged,
+      child: child,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bg = widget.backgroundColor ?? const Color(0xFFFFF8E7);
@@ -426,35 +439,37 @@ class TextReaderState extends State<TextReader> {
                   _pages.length,
                   _hasContentAfterTrial,
                 );
-                return CurlPageView(
-                  key: ValueKey(Object.hash(pageCount, _layoutSize)),
-                  controller: _pageController,
-                  reverse: widget.rtl,
-                  effect: widget.pageTurnEffect,
-                  itemCount: pageCount,
-                  onPageChanged: (page) {
-                    if (isTrialNextSentinel(
-                      index: page,
-                      readableCount: _pages.length,
-                      hasMoreBeyond: _hasContentAfterTrial,
-                    )) {
-                      _onHorizontalTrialSentinel();
-                      return;
-                    }
-                    final p = _paragraphForPage(page);
-                    _currentParagraph = p;
-                    widget.onParagraphChanged?.call(p);
-                  },
-                  itemBuilder: (context, index) {
-                    if (isTrialNextSentinel(
-                      index: index,
-                      readableCount: _pages.length,
-                      hasMoreBeyond: _hasContentAfterTrial,
-                    )) {
-                      return ColoredBox(color: bg);
-                    }
-                    return _buildHorizontalPage(index, style, margin, bg);
-                  },
+                return _wrapFontPinch(
+                  CurlPageView(
+                    key: ValueKey(Object.hash(pageCount, _layoutSize)),
+                    controller: _pageController,
+                    reverse: widget.rtl,
+                    effect: widget.pageTurnEffect,
+                    itemCount: pageCount,
+                    onPageChanged: (page) {
+                      if (isTrialNextSentinel(
+                        index: page,
+                        readableCount: _pages.length,
+                        hasMoreBeyond: _hasContentAfterTrial,
+                      )) {
+                        _onHorizontalTrialSentinel();
+                        return;
+                      }
+                      final p = _paragraphForPage(page);
+                      _currentParagraph = p;
+                      widget.onParagraphChanged?.call(p);
+                    },
+                    itemBuilder: (context, index) {
+                      if (isTrialNextSentinel(
+                        index: index,
+                        readableCount: _pages.length,
+                        hasMoreBeyond: _hasContentAfterTrial,
+                      )) {
+                        return ColoredBox(color: bg);
+                      }
+                      return _buildHorizontalPage(index, style, margin, bg);
+                    },
+                  ),
                 );
               },
             );
@@ -462,62 +477,64 @@ class TextReaderState extends State<TextReader> {
 
           // Trailing spacer: scrolling onto it counts as past-trial gesture.
           final trailHeight = _hasContentAfterTrial ? 96.0 : 0.0;
-          return NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              if (_hasContentAfterTrial &&
-                  n is ScrollUpdateNotification &&
-                  _scrollController.hasClients) {
-                final pos = _scrollController.position;
-                final trailStart = pos.maxScrollExtent - trailHeight;
-                if (pos.pixels > trailStart + 24) {
-                  _emitTrialBoundary(true);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (!mounted || !_scrollController.hasClients) return;
-                    final p = _scrollController.position;
-                    final start = (p.maxScrollExtent - trailHeight)
-                        .clamp(0.0, p.maxScrollExtent);
-                    _scrollController.jumpTo(start);
-                  });
+          return _wrapFontPinch(
+            NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (_hasContentAfterTrial &&
+                    n is ScrollUpdateNotification &&
+                    _scrollController.hasClients) {
+                  final pos = _scrollController.position;
+                  final trailStart = pos.maxScrollExtent - trailHeight;
+                  if (pos.pixels > trailStart + 24) {
+                    _emitTrialBoundary(true);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted || !_scrollController.hasClients) return;
+                      final p = _scrollController.position;
+                      final start = (p.maxScrollExtent - trailHeight)
+                          .clamp(0.0, p.maxScrollExtent);
+                      _scrollController.jumpTo(start);
+                    });
+                  }
                 }
-              }
-              return _onVerticalScroll(n);
-            },
-            child: CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                SliverPadding(
-                  padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
-                  sliver: SliverList.separated(
-                    itemCount: visibleCount,
-                    separatorBuilder: (_, _) =>
-                        SizedBox(height: widget.typography.fontSize * 0.8),
-                    itemBuilder: (context, index) {
-                      final paragraphIndex = visibleStart + index;
-                      final highlighted =
-                          widget.highlightParagraphs.contains(paragraphIndex);
-                      return KeyedSubtree(
-                        key: _paragraphKeys[paragraphIndex],
-                        child: Container(
-                          color: highlighted
-                              ? const Color(0x66FFEB3B)
-                              : Colors.transparent,
-                          child: SelectableText(
-                            book.paragraphs[paragraphIndex],
-                            style: style,
-                            textAlign: _align,
-                            onTap: () {
-                              _currentParagraph = paragraphIndex;
-                              widget.onParagraphChanged?.call(paragraphIndex);
-                            },
+                return _onVerticalScroll(n);
+              },
+              child: CustomScrollView(
+                controller: _scrollController,
+                slivers: [
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
+                    sliver: SliverList.separated(
+                      itemCount: visibleCount,
+                      separatorBuilder: (_, _) =>
+                          SizedBox(height: widget.typography.fontSize * 0.8),
+                      itemBuilder: (context, index) {
+                        final paragraphIndex = visibleStart + index;
+                        final highlighted =
+                            widget.highlightParagraphs.contains(paragraphIndex);
+                        return KeyedSubtree(
+                          key: _paragraphKeys[paragraphIndex],
+                          child: Container(
+                            color: highlighted
+                                ? const Color(0x66FFEB3B)
+                                : Colors.transparent,
+                            child: SelectableText(
+                              book.paragraphs[paragraphIndex],
+                              style: style,
+                              textAlign: _align,
+                              onTap: () {
+                                _currentParagraph = paragraphIndex;
+                                widget.onParagraphChanged?.call(paragraphIndex);
+                              },
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
-                ),
-                if (_hasContentAfterTrial)
-                  SliverToBoxAdapter(child: SizedBox(height: trailHeight)),
-              ],
+                  if (_hasContentAfterTrial)
+                    SliverToBoxAdapter(child: SizedBox(height: trailHeight)),
+                ],
+              ),
             ),
           );
         },

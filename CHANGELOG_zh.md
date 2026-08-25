@@ -1,3 +1,9 @@
+## 0.0.3
+
+* UI 迁至独立 `material_ui`（^1.0.1）；要求 Flutter >=3.44 / Dart 3.12+
+* 手势缩放：漫画支持 pinch + 双击（`ExtendedImage` 1x–4x）；小说 pinch 调节字号（文本 `ReaderFontPinchGesture`、EPUB epub.js）；PDF 保持 `InteractiveViewer` 0.8x–4x
+* Web：跳过不支持的 `screen_brightness`，改用遮罩调光；仅改字体时不再重复 apply 亮度
+
 ## 0.0.2
 
 * 漫画 / 小说 / PDF：点按只开关工具栏；试读触顶靠滑动哨兵页

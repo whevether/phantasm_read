@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 
 import 'example_options.dart';
@@ -24,6 +24,12 @@ class PhantasmReadExampleApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1B4D3E)),
         useMaterial3: true,
       ),
+      builder: (context, child) {
+        // Bridge Theme/Localizations for packages still on flutter/material
+        // (e.g. extended_image) until the ecosystem migrates.
+        // ignore: deprecated_member_use
+        return MaterialUiCompatibilityBridge(child: child!);
+      },
       home: const _HomePage(),
     );
   }
@@ -54,7 +60,7 @@ class _HomePageState extends State<_HomePage> {
           body: ListView(
             children: [
               const ListTile(
-                title: Text('0.0.2 演示'),
+                title: Text('0.0.3 演示'),
                 subtitle: Text('常用功能默认开启 · 扩展能力见下方设置'),
               ),
               ListTile(

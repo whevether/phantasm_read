@@ -1,6 +1,6 @@
 # phantasm_read_example
 
-演示 `phantasm_read` 0.0.2 阅读能力的示例应用。
+演示 `phantasm_read` 0.0.3 阅读能力的示例应用。
 
 ## 运行
 

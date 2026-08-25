@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Simple page-curl / book-flip style transition.
 class PageCurl extends StatelessWidget {
@@ -68,6 +68,7 @@ class CurlPageView extends StatefulWidget {
     this.onPageChanged,
     this.reverse = false,
     this.effect = PageTurnEffect.curl,
+    this.physics,
   });
 
   final int itemCount;
@@ -76,6 +77,7 @@ class CurlPageView extends StatefulWidget {
   final ValueChanged<int>? onPageChanged;
   final bool reverse;
   final PageTurnEffect effect;
+  final ScrollPhysics? physics;
 
   @override
   State<CurlPageView> createState() => _CurlPageViewState();
@@ -173,6 +175,7 @@ class _CurlPageViewState extends State<CurlPageView> {
       controller: _controller,
       itemCount: widget.itemCount,
       reverse: widget.reverse,
+      physics: widget.physics,
       onPageChanged: widget.onPageChanged,
       itemBuilder: (context, index) => _wrapPage(index),
     );
