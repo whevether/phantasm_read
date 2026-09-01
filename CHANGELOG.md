@@ -1,3 +1,8 @@
+## 0.0.4
+
+* Bump dependencies: `material_ui` ^1.1.0, `wakelock_plus` 1.8.0, `archive` 4.2.0 (with override)
+* Fix `homepage` to `https://github.com/whevether/phantasm_read`
+
 ## 0.0.3
 
 * Migrate UI imports to standalone `material_ui` (^1.0.1); require Flutter >=3.44 / Dart 3.12+

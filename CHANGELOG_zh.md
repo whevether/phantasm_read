@@ -1,3 +1,8 @@
+## 0.0.4
+
+* 升级依赖：`material_ui` ^1.1.0、`wakelock_plus` 1.8.0、`archive` 4.2.0（含 override）
+* 补全 `homepage` 为 `https://github.com/whevether/phantasm_read`
+
 ## 0.0.3
 
 * UI 迁至独立 `material_ui`（^1.0.1）；要求 Flutter >=3.44 / Dart 3.12+
