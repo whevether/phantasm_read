@@ -1,6 +1,11 @@
+## 0.0.6
+
+* Bump dependencies: `material_ui` ^1.4.0、`wakelock_plus` 1.8.0、`archive` 4.3.0
+* Fix `homepage` to `https://github.com/whevether/phantasm_read`
+
 ## 0.0.4
 
-* Bump dependencies: `material_ui` ^1.1.0, `wakelock_plus` 1.8.0, `archive` 4.2.0 (with override)
+* Bump dependencies: `material_ui` ^1.1.0, `wakelock_plus` 1.8.0,
 * Fix `homepage` to `https://github.com/whevether/phantasm_read`
 
 ## 0.0.3

@@ -1,6 +1,11 @@
+## 0.0.6
+
+* 升级依赖：`material_ui` ^1.4.0、`wakelock_plus` 1.8.0、`archive` 4.3.0
+* 补全 `homepage` 为 `https://github.com/whevether/phantasm_read`
+
 ## 0.0.4
 
-* 升级依赖：`material_ui` ^1.1.0、`wakelock_plus` 1.8.0、`archive` 4.2.0（含 override）
+* 升级依赖：`material_ui` ^1.1.0、`wakelock_plus` 1.8.0、
 * 补全 `homepage` 为 `https://github.com/whevether/phantasm_read`
 
 ## 0.0.3

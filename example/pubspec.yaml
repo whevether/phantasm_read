@@ -29,7 +29,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   path_provider: ^2.1.6
 
-  material_ui: ^1.1.0
+  material_ui: ^1.4.0
 
 dev_dependencies:
   integration_test:
