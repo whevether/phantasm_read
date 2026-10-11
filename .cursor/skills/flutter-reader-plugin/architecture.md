@@ -56,7 +56,7 @@ dependencies:
   extended_image: 10.1.0
   webview_flutter: 4.14.1
   screen_brightness: 2.1.11
-  wakelock_plus: 1.7.0
+  wakelock_plus: 1.8.1
   charset_converter: 2.5.1
 
 flutter:

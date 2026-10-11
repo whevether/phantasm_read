@@ -1,3 +1,8 @@
+## 0.0.7
+
+* Bump dependencies: `material_ui` ^1.6.0、`archive` 4.4.0、`printing` 5.15.1、`shared_preferences` 2.5.6、`wakelock_plus` 1.8.1; require Flutter >=3.47 / Dart 3.13+
+* Android toolchain: AGP 9.4.2、Kotlin 2.4.21、Gradle 9.8.0、NDK 30.0.16248370
+
 ## 0.0.6
 
 * Bump dependencies: `material_ui` ^1.4.0、`wakelock_plus` 1.8.0、`archive` 4.3.0
