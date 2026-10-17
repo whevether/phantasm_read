@@ -15,7 +15,9 @@ import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
 import '../common/reader_trial_limit.dart';
-import '../common/reader_wake_lock.dart';
+import '../common/reader_page_window.dart';
+import '../common/page_reader_toolbar.dart';
+import '../common/reader_identity.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
 import '../common/trial_gesture_boundary.dart';
@@ -70,8 +72,7 @@ class ComicReader extends StatefulWidget {
   State<ComicReader> createState() => _ComicReaderState();
 }
 
-class _ComicReaderState extends State<ComicReader>
-    with WidgetsBindingObserver {
+class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
   late final ReaderBrightness _brightness = ReaderBrightness();
   late ReaderSettings _settings;
   late ComicReadingMode _mode;
@@ -81,52 +82,28 @@ class _ComicReaderState extends State<ComicReader>
   List<ReaderBookmark> _bookmarks = const [];
   DateTime? _sessionStarted;
   Timer? _sessionTimer;
+  late final _session = ReaderSession(_brightness);
+  int _loadVersion = 0;
+  String? _identity;
+  String? _error;
+  bool _loading = true;
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
-  String get _bookId =>
-      widget.bookId ?? 'comic_${widget.pages.length}_${widget.pages.hashCode}';
+  String get _bookId => widget.bookId ?? (_identity ??= widget.pages.stableId);
 
   bool get _doublePageActive =>
       _settings.doublePage &&
       _mode == ComicReadingMode.horizontal &&
       widget.pages.length > 1;
 
-  int _pageCountFor({
-    bool? doublePage,
-    ComicReadingMode? mode,
-    ReaderTrialLimit? trial,
-  }) {
-    final dp = doublePage ?? _settings.doublePage;
-    final m = mode ?? _mode;
-    final rawTotal = widget.pages.length;
-    final t = trial ?? widget.trialLimit;
-    if (dp && m == ComicReadingMode.horizontal && rawTotal > 1) {
-      final start = t?.startIndex ?? 0;
-      final visibleRaw = t == null || !t.isActive
-          ? rawTotal
-          : t.visibleCount(rawTotal);
-      if (visibleRaw <= 0) return 0;
-      final firstSpread = start ~/ 2;
-      final lastRaw = start + visibleRaw - 1;
-      final lastSpread = lastRaw ~/ 2;
-      return (lastSpread - firstSpread + 1).clamp(1, rawTotal);
-    }
-    final total = rawTotal;
-    if (t == null || !t.isActive) return total;
-    return t.visibleCount(total);
-  }
-
+  ReaderPageWindow get _window => ReaderPageWindow(
+    widget.pages.length,
+    trial: widget.trialLimit,
+    doublePage: _doublePageActive,
+  );
   int get _fullPageCount => widget.pages.length;
-
-  int get _pageCount => _pageCountFor();
-
-  int _rawIndex(int logical) {
-    final start = widget.trialLimit?.startIndex ?? 0;
-    if (_doublePageActive) {
-      return (start + logical * 2).clamp(0, widget.pages.length - 1);
-    }
-    return (start + logical).clamp(0, widget.pages.length - 1);
-  }
+  int get _pageCount => _window.count;
+  int _rawIndex(int logical) => _window.content(logical);
 
   int _contentPageIndex(int logicalIndex) => _rawIndex(logicalIndex);
 
@@ -151,8 +128,7 @@ class _ComicReaderState extends State<ComicReader>
         limit.hasMoreBeyond(widget.pages.length);
   }
 
-  int get _pageViewCount =>
-      trialPageViewCount(_pageCount, _hasMoreBeyondTrial);
+  int get _pageViewCount => trialPageViewCount(_pageCount, _hasMoreBeyondTrial);
 
   void _onTrialNextSentinel() {
     final limit = widget.trialLimit;
@@ -177,20 +153,14 @@ class _ComicReaderState extends State<ComicReader>
     });
   }
 
-  int _logicalIndexForRaw(
-    int raw, {
-    bool? doublePage,
-    ComicReadingMode? mode,
-  }) {
-    final start = widget.trialLimit?.startIndex ?? 0;
-    final dp = doublePage ?? _settings.doublePage;
-    final m = mode ?? _mode;
-    final count = _pageCountFor(doublePage: dp, mode: m);
-    if (count == 0) return 0;
-    if (dp && m == ComicReadingMode.horizontal) {
-      return ((raw - start) ~/ 2).clamp(0, count - 1);
-    }
-    return (raw - start).clamp(0, count - 1);
+  int _logicalIndexForRaw(int raw, {bool? doublePage, ComicReadingMode? mode}) {
+    return ReaderPageWindow(
+      widget.pages.length,
+      trial: widget.trialLimit,
+      doublePage:
+          (doublePage ?? _settings.doublePage) &&
+          (mode ?? _mode) == ComicReadingMode.horizontal,
+    ).logical(raw);
   }
 
   void _syncPageIndexAfterLayoutChange() {
@@ -217,54 +187,85 @@ class _ComicReaderState extends State<ComicReader>
   }
 
   Future<void> _bootstrap() async {
-    if (widget.persistSettings) {
-      final saved = await ReaderSettingsStore.instance.load();
-      if (saved != null && mounted) {
-        _settings = saved.copyWith(
-          // keep comic-specific from widget if needed
-        );
+    final version = ++_loadVersion;
+    final bookId = _bookId;
+    final pages = widget.pages;
+    var settings = widget.settings;
+    var content = widget.initialPage;
+    var legacyPosition = false;
+    try {
+      if (widget.persistSettings) {
+        settings = await ReaderSettingsStore.instance.load() ?? settings;
       }
-    }
-    if (widget.persistProgress) {
-      final progress = await ReaderProgressStore.instance.load(_bookId);
-      if (progress != null) {
-        _currentPage = progress.pageIndex.clamp(0, _pageCount - 1);
+      if (!mounted || version != _loadVersion) return;
+      if (widget.persistProgress) {
+        final progress = await ReaderProgressStore.instance.load(bookId);
+        if (progress != null) {
+          content = progress.pageIndex;
+          legacyPosition = progress.positionVersion < 2;
+        }
       }
-    }
-    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-    if (widget.pages is ComicPagesUrls) {
-      await ensureComicNetworkImageCache();
-    }
-    _pageController = ExtendedPageController(initialPage: _currentPage);
-    if (_settings.immersive) await ReaderImmersive.enter();
-    await _enterReading();
-    _sessionStarted = DateTime.now();
-    _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      final started = _sessionStarted;
-      if (started != null) {
-        widget.onSessionTick?.call(DateTime.now().difference(started));
+      final bookmarks = await ReaderBookmarkStore.instance.listBookmarks(
+        bookId,
+      );
+      if (pages is ComicPagesUrls) await ensureComicNetworkImageCache();
+      if (!mounted || version != _loadVersion) return;
+      _settings = settings;
+      if (legacyPosition) content = _window.content(content);
+      _bookmarks = bookmarks
+          .map(
+            (b) => b.positionVersion >= 2 || b.pageIndex == null
+                ? b
+                : ReaderBookmark(
+                    id: b.id,
+                    bookId: b.bookId,
+                    title: b.title,
+                    pageIndex: _window.content(b.pageIndex!),
+                    cfi: b.cfi,
+                    paragraphIndex: b.paragraphIndex,
+                    note: b.note,
+                    createdAt: b.createdAt,
+                  ),
+          )
+          .toList();
+      if (bookmarks.any((b) => b.positionVersion < 2)) {
+        await ReaderBookmarkStore.instance.saveBookmarks(bookId, _bookmarks);
       }
-    });
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _enterReading() async {
-    await _brightness.apply(_settings.brightness);
-    if (_settings.keepScreenOn) await ReaderWakeLock.enable();
-  }
-
-  Future<void> _leaveReading() async {
-    await _brightness.restore();
-    await ReaderWakeLock.disable();
-    await ReaderImmersive.leave();
+      if (!mounted || version != _loadVersion) return;
+      _currentPage = _logicalIndexForRaw(content);
+      final old = _pageController;
+      _pageController = ExtendedPageController(initialPage: _currentPage);
+      WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
+      await _session.apply(_settings);
+      if (!mounted || version != _loadVersion) return;
+      _sessionTimer?.cancel();
+      _sessionStarted = DateTime.now();
+      _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted) {
+          widget.onSessionTick?.call(
+            DateTime.now().difference(_sessionStarted!),
+          );
+        }
+      });
+      setState(() => _loading = false);
+    } catch (e) {
+      if (mounted && version == _loadVersion) setState(() => _error = '$e');
+    }
   }
 
   Future<void> _saveProgress() async {
-    if (!widget.persistProgress) return;
+    if (!widget.persistProgress ||
+        _loading ||
+        _pageController == null ||
+        widget.pages.length == 0) {
+      return;
+    }
     final progress = ReaderProgress(
       bookId: _bookId,
-      pageIndex: _currentPage,
-      percentage: _pageCount == 0 ? 0 : (_currentPage + 1) / _pageCount,
+      pageIndex: _currentRawIndex,
+      percentage: widget.pages.length == 0
+          ? 0
+          : (_currentRawIndex + 1) / widget.pages.length,
     );
     await ReaderProgressStore.instance.save(progress);
     await ReaderSyncHub(onSync: widget.onSync).emit(
@@ -279,30 +280,30 @@ class _ComicReaderState extends State<ComicReader>
   @override
   void didUpdateWidget(covariant ComicReader oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.settings != widget.settings) {
-      final wasDouble = _doublePageActive;
-      final raw = _currentRawIndex;
-      _settings = widget.settings;
-      _currentPage = _logicalIndexForRaw(raw);
-      _brightness.apply(_settings.brightness);
-      if (_settings.keepScreenOn) {
-        ReaderWakeLock.enable();
-      } else {
-        ReaderWakeLock.disable();
-      }
-      if (wasDouble != _doublePageActive) {
-        _syncPageIndexAfterLayoutChange();
-      }
+    if (oldWidget.pages.stableId != widget.pages.stableId ||
+        oldWidget.bookId != widget.bookId) {
+      _identity = null;
+      _error = null;
+      _loading = true;
+      _sessionTimer?.cancel();
+      _mode = widget.readingMode;
+      _bootstrap();
+      return;
     }
+    final raw = _currentRawIndex;
+    if (oldWidget.settings != widget.settings) {
+      _settings = widget.settings;
+      _session.apply(_settings);
+    }
+    if (oldWidget.readingMode != widget.readingMode) _mode = widget.readingMode;
+    _currentPage = _logicalIndexForRaw(raw);
+    _syncPageIndexAfterLayoutChange();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      ReaderWakeLock.disable();
       _saveProgress();
-    } else if (state == AppLifecycleState.resumed && _settings.keepScreenOn) {
-      ReaderWakeLock.enable();
     }
   }
 
@@ -311,9 +312,10 @@ class _ComicReaderState extends State<ComicReader>
     WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _saveProgress();
-    _leaveReading();
+    _loadVersion++;
+    _session.dispose();
     _pageController?.dispose();
-    _brightness.dispose();
+
     super.dispose();
   }
 
@@ -329,7 +331,7 @@ class _ComicReaderState extends State<ComicReader>
       final raw = _rawIndex(i);
       await precacheImage(_providerAt(raw), context);
       if (!mounted) return;
-      if (_doublePageActive && raw + 1 < widget.pages.length) {
+      if (_doublePageActive && _window.readable(raw + 1)) {
         await precacheImage(_providerAt(raw + 1), context);
       }
     }
@@ -340,7 +342,6 @@ class _ComicReaderState extends State<ComicReader>
   void _emitSettings(ReaderSettings next) {
     final wasDouble = _doublePageActive;
     final enablingDouble = next.doublePage && !_settings.doublePage;
-    final brightnessChanged = next.brightness != _settings.brightness;
     var nextMode = _mode;
     if (enablingDouble && _mode == ComicReadingMode.vertical) {
       nextMode = ComicReadingMode.horizontal;
@@ -358,19 +359,7 @@ class _ComicReaderState extends State<ComicReader>
     if (wasDouble != _doublePageActive) {
       _syncPageIndexAfterLayoutChange();
     }
-    if (brightnessChanged) {
-      _brightness.apply(next.brightness);
-    }
-    if (next.keepScreenOn) {
-      ReaderWakeLock.enable();
-    } else {
-      ReaderWakeLock.disable();
-    }
-    if (next.immersive) {
-      ReaderImmersive.enter();
-    } else {
-      ReaderImmersive.leave();
-    }
+    _session.apply(next);
     if (widget.persistSettings) {
       ReaderSettingsStore.instance.save(next);
     }
@@ -378,29 +367,28 @@ class _ComicReaderState extends State<ComicReader>
   }
 
   void _goToPage(int logicalPage) {
-    final limit = widget.trialLimit;
-    final total = widget.pages.length;
-    var target = logicalPage;
-    if (limit != null && limit.isActive) {
-      final contentTarget = _contentPageIndex(
-        logicalPage.clamp(0, _pageCount - 1),
+    if (_pageCount == 0) return;
+    if (logicalPage < 0 || logicalPage >= _pageCount) {
+      _notifyTrialLimit(
+        ReaderTrialLimitAction.seek,
+        logicalPage < 0 ? _window.start - 1 : _window.start + _window.visible,
       );
-      if (logicalPage < 0 ||
-          logicalPage >= _pageCount ||
-          !limit.isReadable(contentTarget, total)) {
-        _notifyTrialLimit(
-          ReaderTrialLimitAction.seek,
-          logicalPage < 0 ? 0 : _contentPageIndex(_pageCount - 1) + 1,
-        );
-        target = limit.logicalIndex(limit.clampIndex(contentTarget, total));
-      }
-    } else {
-      target = logicalPage.clamp(0, (total - 1).clamp(0, 1 << 30));
     }
-    _pageController?.jumpToPage(target);
+    final target = logicalPage.clamp(0, _pageCount - 1);
+    if (_pageController?.hasClients ?? false) {
+      _pageController!.jumpToPage(target);
+    }
     setState(() => _currentPage = target);
     widget.onPageChanged?.call(_contentPageIndex(target));
     _saveProgress();
+  }
+
+  void _goToContent(int raw) {
+    if (!_window.readable(raw)) {
+      _notifyTrialLimit(ReaderTrialLimitAction.seek, raw);
+      return;
+    }
+    _goToPage(_logicalIndexForRaw(raw));
   }
 
   BoxFit get _fit {
@@ -416,7 +404,7 @@ class _ComicReaderState extends State<ComicReader>
 
   Widget _buildPage(int logicalIndex) {
     final raw = _rawIndex(logicalIndex);
-    if (_doublePageActive && raw + 1 < widget.pages.length) {
+    if (_doublePageActive && _window.readable(raw + 1)) {
       return Row(
         children: [
           Expanded(child: _image(raw)),
@@ -445,10 +433,7 @@ class _ComicReaderState extends State<ComicReader>
         final pointerDown = state.pointerDownPosition;
         final begin = state.gestureDetails?.totalScale ?? 1.0;
         final end = begin > 1.5 ? 1.0 : 2.5;
-        state.handleDoubleTap(
-          scale: end,
-          doubleTapPosition: pointerDown,
-        );
+        state.handleDoubleTap(scale: end, doubleTapPosition: pointerDown);
       },
       loadStateChanged: (state) {
         switch (state.extendedImageLoadState) {
@@ -459,11 +444,16 @@ class _ComicReaderState extends State<ComicReader>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.broken_image_outlined, color: Colors.white54),
+                  const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white54,
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     '图片加载失败',
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
                   ),
                   IconButton(
                     icon: const Icon(Icons.refresh),
@@ -480,16 +470,19 @@ class _ComicReaderState extends State<ComicReader>
   }
 
   Future<void> _toggleBookmark() async {
-    final existing = _bookmarks.where((b) => b.pageIndex == _currentPage);
+    final existing = _bookmarks.where((b) => b.pageIndex == _currentRawIndex);
     if (existing.isNotEmpty) {
-      await ReaderBookmarkStore.instance.removeBookmark(_bookId, existing.first.id);
+      await ReaderBookmarkStore.instance.removeBookmark(
+        _bookId,
+        existing.first.id,
+      );
     } else {
       await ReaderBookmarkStore.instance.addBookmark(
         ReaderBookmark(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          id: readerRecordId(),
           bookId: _bookId,
-          title: 'Page ${_currentPage + 1}',
-          pageIndex: _currentPage,
+          title: 'Page ${_currentRawIndex + 1}',
+          pageIndex: _currentRawIndex,
         ),
       );
     }
@@ -509,15 +502,17 @@ class _ComicReaderState extends State<ComicReader>
                 title: Text(b.title),
                 onTap: () {
                   Navigator.pop(context);
-                  if (b.pageIndex != null) _goToPage(b.pageIndex!);
+                  if (b.pageIndex != null) _goToContent(b.pageIndex!);
                 },
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
-                    await ReaderBookmarkStore.instance
-                        .removeBookmark(_bookId, b.id);
-                    _bookmarks =
-                        await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+                    await ReaderBookmarkStore.instance.removeBookmark(
+                      _bookId,
+                      b.id,
+                    );
+                    _bookmarks = await ReaderBookmarkStore.instance
+                        .listBookmarks(_bookId);
                     if (context.mounted) Navigator.pop(context);
                     if (mounted) setState(() {});
                   },
@@ -543,14 +538,13 @@ class _ComicReaderState extends State<ComicReader>
               mainAxisSpacing: 8,
               crossAxisSpacing: 8,
             ),
-            itemCount: widget.pages.length,
-            itemBuilder: (context, index) {
+            itemCount: _window.visible,
+            itemBuilder: (context, i) {
+              final index = _window.start + i;
               return GestureDetector(
                 onTap: () {
                   Navigator.pop(context);
-                  final logical =
-                      _doublePageActive ? index ~/ 2 : index;
-                  _goToPage(logical);
+                  _goToContent(index);
                 },
                 child: Image(image: _providerAt(index), fit: BoxFit.cover),
               );
@@ -581,12 +575,19 @@ class _ComicReaderState extends State<ComicReader>
 
   @override
   Widget build(BuildContext context) {
+    if (_loading && _error == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) return Center(child: Text('Load failed: $_error'));
+    if (widget.pages.length == 0 || _window.visible == 0) {
+      return const Center(child: Text('No readable content'));
+    }
     final controller = _pageController;
     if (controller == null) {
       return const Center(child: CircularProgressIndicator());
     }
     final progress = _pageCount == 0 ? 0.0 : (_currentPage + 1) / _pageCount;
-    final bookmarked = _bookmarks.any((b) => b.pageIndex == _currentPage);
+    final bookmarked = _bookmarks.any((b) => b.pageIndex == _currentRawIndex);
 
     return Focus(
       autofocus: true,
@@ -615,8 +616,7 @@ class _ComicReaderState extends State<ComicReader>
                     scrollDirection: _mode == ComicReadingMode.vertical
                         ? Axis.vertical
                         : Axis.horizontal,
-                    reverse:
-                        widget.rtl && _mode == ComicReadingMode.horizontal,
+                    reverse: widget.rtl && _mode == ComicReadingMode.horizontal,
                     onPageChanged: (index) {
                       if (isTrialNextSentinel(
                         index: index,
@@ -640,7 +640,32 @@ class _ComicReaderState extends State<ComicReader>
                       )) {
                         return const SizedBox.expand();
                       }
-                      return _buildPage(index);
+                      final page = _buildPage(index);
+                      if (widget.pageTurnEffect == PageTurnEffect.none ||
+                          _mode == ComicReadingMode.vertical) {
+                        return page;
+                      }
+                      return AnimatedBuilder(
+                        animation: controller,
+                        child: page,
+                        builder: (context, child) {
+                          final offset =
+                              controller.hasClients &&
+                                  controller.position.hasContentDimensions
+                              ? ((controller.page ??
+                                            controller.initialPage.toDouble()) -
+                                        index)
+                                    .clamp(-1.0, 1.0)
+                              : 0.0;
+                          return PageCurl(
+                            progress: offset.abs(),
+                            hinge: offset < 0
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: child!,
+                          );
+                        },
+                      );
                     },
                   ),
                 ),
@@ -650,16 +675,21 @@ class _ComicReaderState extends State<ComicReader>
                 ),
                 if (widget.watermarkText != null)
                   ReaderWatermark(text: widget.watermarkText!),
-                InkAnnotationLayer(enabled: widget.enableInk),
+                ReaderInk(
+                  key: ValueKey('$_bookId:$_currentRawIndex'),
+                  bookId: _bookId,
+                  location: '$_currentRawIndex',
+                  enabled: widget.enableInk,
+                ),
                 if (!_toolbarVisible)
                   ReaderProgressBar(
                     progress: progress,
-                    onSeek: (v) =>
-                        _goToPage((v * (_pageCount - 1)).round()),
+                    onSeek: (v) => _goToPage((v * (_pageCount - 1)).round()),
                   ),
                 if (widget.showToolbar && _toolbarVisible)
-                  _ComicToolbar(
-                    pageLabel: '${_contentPageIndex(_currentPage) + 1} / $_fullPageCount',
+                  PageReaderToolbar(
+                    pageLabel:
+                        '${_contentPageIndex(_currentPage) + 1} / $_fullPageCount',
                     progress: progress,
                     settings: _settings,
                     mode: _mode,
@@ -676,225 +706,13 @@ class _ComicReaderState extends State<ComicReader>
                     onToggleBookmark: _toggleBookmark,
                     onShowBookmarks: _showBookmarks,
                     onShowThumbs: _showThumbnails,
-                    onSeek: (v) =>
-                        _goToPage((v * (_pageCount - 1)).round()),
-                    onPageInput: _goToPage,
+                    onSeek: (v) => _goToPage((v * (_pageCount - 1)).round()),
+                    onPageInput: _goToContent,
                   ),
               ],
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class _ComicToolbar extends StatelessWidget {
-  const _ComicToolbar({
-    required this.pageLabel,
-    required this.progress,
-    required this.settings,
-    required this.mode,
-    required this.bookmarked,
-    required this.onModeChanged,
-    required this.onSettingsChanged,
-    required this.onToggleBookmark,
-    required this.onShowBookmarks,
-    required this.onShowThumbs,
-    required this.onSeek,
-    required this.onPageInput,
-  });
-
-  final String pageLabel;
-  final double progress;
-  final ReaderSettings settings;
-  final ComicReadingMode mode;
-  final bool bookmarked;
-  final ValueChanged<ComicReadingMode> onModeChanged;
-  final ValueChanged<ReaderSettings> onSettingsChanged;
-  final VoidCallback onToggleBookmark;
-  final VoidCallback onShowBookmarks;
-  final VoidCallback onShowThumbs;
-  final ValueChanged<double> onSeek;
-  final ValueChanged<int> onPageInput;
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: Material(
-        color: Colors.black54,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(pageLabel, style: const TextStyle(color: Colors.white)),
-                Slider(value: progress.clamp(0, 1), onChanged: onSeek),
-                Row(
-                  children: [
-                    const Icon(Icons.brightness_6, color: Colors.white, size: 18),
-                    Expanded(
-                      child: Slider(
-                        value: settings.brightness,
-                        onChanged: (v) =>
-                            onSettingsChanged(settings.copyWith(brightness: v)),
-                      ),
-                    ),
-                  ],
-                ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        tooltip: '方向',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onModeChanged(
-                          mode == ComicReadingMode.vertical
-                              ? ComicReadingMode.horizontal
-                              : ComicReadingMode.vertical,
-                        ),
-                        icon: Icon(
-                          mode == ComicReadingMode.vertical
-                              ? Icons.swap_vert
-                              : Icons.swap_horiz,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '适应',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () {
-                          final next = switch (settings.comicFitMode) {
-                            ComicFitMode.contain => ComicFitMode.width,
-                            ComicFitMode.width => ComicFitMode.height,
-                            ComicFitMode.height => ComicFitMode.contain,
-                          };
-                          onSettingsChanged(
-                            settings.copyWith(comicFitMode: next),
-                          );
-                        },
-                        icon: const Icon(Icons.fit_screen, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: settings.doublePage
-                            ? '关闭双页'
-                            : mode == ComicReadingMode.vertical
-                                ? '双页（将切换为横向）'
-                                : '双页',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(doublePage: !settings.doublePage),
-                        ),
-                        icon: Icon(
-                          settings.doublePage
-                              ? Icons.menu_book
-                              : Icons.menu_book_outlined,
-                          color: settings.doublePage
-                              ? (mode == ComicReadingMode.horizontal
-                                  ? Colors.amber
-                                  : Colors.amber.withValues(alpha: 0.45))
-                              : Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '书签',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onToggleBookmark,
-                        icon: Icon(
-                          bookmarked ? Icons.bookmark : Icons.bookmark_border,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '书签列表',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onShowBookmarks,
-                        icon: const Icon(Icons.bookmarks, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: '缩略图',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onShowThumbs,
-                        icon: const Icon(Icons.grid_view, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: '不熄屏',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(
-                            keepScreenOn: !settings.keepScreenOn,
-                          ),
-                        ),
-                        icon: Icon(
-                          settings.keepScreenOn
-                              ? Icons.phonelink_lock
-                              : Icons.phonelink_erase,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Row(
-                  children: [
-                    for (final c in [0xFF000000, 0xFF333333, 0xFFFFFFFF])
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: InkWell(
-                          onTap: () => onSettingsChanged(
-                            settings.copyWith(comicBackground: c),
-                          ),
-                          child: CircleAvatar(
-                            radius: 10,
-                            backgroundColor: Color(c),
-                          ),
-                        ),
-                      ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () async {
-                        final controller = TextEditingController(
-                          text: pageLabel.split(' / ').first,
-                        );
-                        final go = await showDialog<int>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('跳转页码'),
-                            content: TextField(
-                              controller: controller,
-                              keyboardType: TextInputType.number,
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('取消'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(
-                                  context,
-                                  int.tryParse(controller.text),
-                                ),
-                                child: const Text('确定'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (go != null) onPageInput(go - 1);
-                      },
-                      child: const Text('跳页', style: TextStyle(color: Colors.white)),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }

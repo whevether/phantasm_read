@@ -25,6 +25,7 @@ class TextReader extends StatefulWidget {
     this.onChaptersLoaded,
     this.jumpToParagraph,
     this.initialParagraph,
+    this.initialTextOffset = 0,
     this.onParagraphChanged,
     this.highlightParagraphs = const {},
     this.rtl = false,
@@ -45,6 +46,7 @@ class TextReader extends StatefulWidget {
   final ValueChanged<List<NovelChapter>>? onChaptersLoaded;
   final int? jumpToParagraph;
   final int? initialParagraph;
+  final int initialTextOffset;
   final ValueChanged<int>? onParagraphChanged;
   final Set<int> highlightParagraphs;
   final bool rtl;
@@ -66,26 +68,47 @@ class TextReaderState extends State<TextReader> {
   late Future<_TextBook> _future;
   final ScrollController _scrollController = ScrollController();
   PageController? _pageController;
-  List<GlobalKey> _paragraphKeys = [];
+  List<double> _offsets = [];
+  List<double> _heights = [];
+  int _loadVersion = 0;
+  bool _restoreScroll = true;
+  TextScaler _scaler = TextScaler.noScaling;
+  TextDirection _direction = TextDirection.ltr;
   List<String> _paragraphs = [];
-  List<List<String>> _pages = [];
+  List<int> _characterOffsets = [];
+  int _totalCharacters = 0;
+  List<List<TextFragment>> _pages = [];
   int _currentParagraph = 0;
+  int _currentTextOffset = 0;
   Size? _layoutSize;
   bool _pagesReady = false;
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
   List<String> get paragraphs => _paragraphs;
   int get currentParagraph => _currentParagraph;
+  int get currentTextOffset => _currentTextOffset;
+  double get characterProgress =>
+      _totalCharacters == 0 || _characterOffsets.isEmpty
+      ? 0
+      : ((_characterOffsets[_currentParagraph.clamp(
+                      0,
+                      _characterOffsets.length - 1,
+                    )] +
+                    _currentTextOffset) /
+                _totalCharacters)
+            .clamp(0, 1);
 
   @override
   void initState() {
     super.initState();
     _currentParagraph = widget.initialParagraph ?? 0;
+    _currentTextOffset = widget.initialTextOffset;
     _future = _load();
   }
 
   @override
   void dispose() {
+    _loadVersion++;
     _scrollController.dispose();
     _pageController?.dispose();
     super.dispose();
@@ -98,12 +121,18 @@ class TextReaderState extends State<TextReader> {
         oldWidget.encoding != widget.encoding ||
         oldWidget.kind != widget.kind) {
       _pagesReady = false;
+      _layoutSize = null;
+      _restoreScroll = true;
+      _currentParagraph = widget.initialParagraph ?? 0;
+      _currentTextOffset = widget.initialTextOffset;
       _future = _load();
     }
     if (oldWidget.jumpToParagraph != widget.jumpToParagraph &&
         widget.jumpToParagraph != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        jumpToParagraph(widget.jumpToParagraph!);
+        if (mounted && widget.jumpToParagraph != null) {
+          jumpToParagraph(widget.jumpToParagraph!);
+        }
       });
     }
     if (oldWidget.typography != widget.typography ||
@@ -126,13 +155,7 @@ class TextReaderState extends State<TextReader> {
     final max = widget.maxParagraphIndex;
     if (max == null) return _paragraphs.length - 1;
     if (_paragraphs.isEmpty) return 0;
-    return max.clamp(0, _paragraphs.length - 1);
-  }
-
-  bool get _atTrialEnd {
-    final max = widget.maxParagraphIndex;
-    if (max == null || _paragraphs.isEmpty) return false;
-    return _currentParagraph >= max && max < _paragraphs.length - 1;
+    return max.clamp(-1, _paragraphs.length - 1);
   }
 
   bool get _hasContentBeforeTrial {
@@ -189,21 +212,34 @@ class TextReaderState extends State<TextReader> {
   }
 
   Future<_TextBook> _load() async {
+    final version = ++_loadVersion;
+    final kind = widget.kind;
     final raw = await _decoder.decodeBytes(
       widget.bytes,
       encoding: widget.encoding,
     );
-    final content = _decoder.normalizeContent(raw, kind: widget.kind);
+    final content = _decoder.normalizeContent(raw, kind: kind);
     final paragraphs = content
-        .split(RegExp(r'\n\s*\n'))
+        .split(RegExp(r'\r?\n'))
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList();
     final chapters = _detectChapters(paragraphs);
-    _paragraphs = paragraphs;
-    _paragraphKeys = List.generate(paragraphs.length, (_) => GlobalKey());
-    widget.onChaptersLoaded?.call(chapters);
-    return _TextBook(paragraphs: paragraphs, chapters: chapters);
+    if (mounted && version == _loadVersion) {
+      _paragraphs = paragraphs;
+      _characterOffsets = [];
+      _totalCharacters = 0;
+      for (final paragraph in paragraphs) {
+        _characterOffsets.add(_totalCharacters);
+        _totalCharacters += paragraph.length;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && version == _loadVersion) {
+          widget.onChaptersLoaded?.call(chapters);
+        }
+      });
+    }
+    return _TextBook(paragraphs: paragraphs);
   }
 
   List<NovelChapter> _detectChapters(List<String> paragraphs) {
@@ -224,54 +260,115 @@ class TextReaderState extends State<TextReader> {
   void _ensureHorizontalPages(Size size) {
     if (_pagesReady && _layoutSize == size) return;
     _layoutSize = size;
-    final style = _textStyle(
-      widget.foregroundColor ?? const Color(0xFF222222),
-    );
+    final style = _textStyle(widget.foregroundColor ?? const Color(0xFF222222));
     final margin = widget.typography.pageMargin;
     final readable = _paragraphs.sublist(
       _firstReadableParagraph,
       _lastReadableParagraph + 1,
     );
-    _pages = paginateParagraphs(
+    _pages = paginateText(
       paragraphs: readable,
       pageSize: size,
       style: style,
-      padding: EdgeInsets.all(margin),
+      padding: _pagePadding(margin),
+      textScaler: _scaler,
+      textDirection: _direction,
+      textAlign: _align,
+      startIndex: _firstReadableParagraph,
     );
-    if (_pages.isEmpty && _paragraphs.isNotEmpty) {
-      _pages = [_paragraphs];
-    }
     final pageIndex = _pageIndexForParagraph(_currentParagraph);
-    _pageController?.dispose();
+    final old = _pageController;
     _pageController = PageController(initialPage: pageIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
     _pagesReady = true;
   }
 
   int _pageIndexForParagraph(int paragraphIndex) {
-    final relative =
-        (paragraphIndex - _firstReadableParagraph).clamp(0, 1 << 30);
-    var count = 0;
-    for (var i = 0; i < _pages.length; i++) {
-      final next = count + _pages[i].length;
-      if (relative < next) return i;
-      count = next;
-    }
-    return (_pages.isEmpty ? 0 : _pages.length - 1);
+    final i = _pages.indexWhere(
+      (p) => p.any(
+        (f) =>
+            f.paragraphIndex == paragraphIndex &&
+            f.endOffset > _currentTextOffset,
+      ),
+    );
+    return i < 0 ? (_pages.isEmpty ? 0 : _pages.length - 1) : i;
   }
 
-  int _paragraphForPage(int pageIndex) {
-    var count = 0;
-    for (var i = 0; i < pageIndex && i < _pages.length; i++) {
-      count += _pages[i].length;
+  int _paragraphForPage(int index) => _pages[index].first.paragraphIndex;
+
+  EdgeInsets _pagePadding(double margin) => EdgeInsets.all(margin);
+
+  void _ensureVerticalLayout(Size size, TextStyle style, double margin) {
+    if (_layoutSize == size && _heights.length == _paragraphs.length) return;
+    _layoutSize = size;
+    _offsets = [];
+    _heights = [];
+    var offset = 0.0;
+    for (var i = 0; i < _paragraphs.length; i++) {
+      final painter = TextPainter(
+        text: TextSpan(text: _paragraphs[i], style: style),
+        textAlign: _align,
+        textDirection: _direction,
+        textScaler: _scaler,
+      );
+      painter.layout(
+        maxWidth: (size.width - margin * 2).clamp(1.0, double.infinity),
+      );
+      final height = painter.height + widget.typography.fontSize * 0.8;
+      painter.dispose();
+      _offsets.add(offset);
+      _heights.add(height);
+      offset += height;
     }
-    if (_paragraphs.isEmpty) return 0;
-    return (_firstReadableParagraph + count).clamp(0, _paragraphs.length - 1);
+    _restoreScroll = true;
+  }
+
+  double _offsetForParagraph(int i) =>
+      _offsets[i] - _offsets[_firstReadableParagraph];
+
+  void _reportVerticalPosition() {
+    if (!_scrollController.hasClients || _offsets.isEmpty) return;
+    final offset = _scrollController.offset + _offsets[_firstReadableParagraph];
+    var lo = _firstReadableParagraph, hi = _lastReadableParagraph;
+    while (lo < hi) {
+      final mid = (lo + hi + 1) ~/ 2;
+      if (_offsets[mid] <= offset) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (_currentParagraph != lo) {
+      _currentParagraph = lo;
+      widget.onParagraphChanged?.call(lo);
+    }
+  }
+
+  /// Continuous scrolling is awaited so auto-reading never overlaps animations.
+  Future<bool> scrollBy(double pixels) async {
+    if (!_scrollController.hasClients) return false;
+    final position = _scrollController.position;
+    final target = (position.pixels + pixels).clamp(
+      0.0,
+      position.maxScrollExtent,
+    );
+    if ((target - position.pixels).abs() < 0.1) return false;
+    await _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 80),
+      curve: Curves.linear,
+    );
+    return true;
   }
 
   Future<void> jumpToParagraph(int index) async {
-    if (_paragraphs.isEmpty) return;
+    if (_paragraphs.isEmpty ||
+        _firstReadableParagraph > _lastReadableParagraph) {
+      return;
+    }
     final i = index.clamp(_firstReadableParagraph, _lastReadableParagraph);
     _currentParagraph = i;
+    _currentTextOffset = 0;
     widget.onParagraphChanged?.call(i);
     if (widget.readingMode == NovelReadingMode.horizontal) {
       final page = _pageIndexForParagraph(i);
@@ -284,23 +381,21 @@ class TextReaderState extends State<TextReader> {
       }
       return;
     }
-    if (i >= _paragraphKeys.length) return;
-    final ctx = _paragraphKeys[i].currentContext;
-    if (ctx != null) {
-      await Scrollable.ensureVisible(
-        ctx,
+    if (_scrollController.hasClients && _offsets.isNotEmpty) {
+      await _scrollController.animateTo(
+        _offsetForParagraph(i)
+            .clamp(0.0, _scrollController.position.maxScrollExtent),
         duration: const Duration(milliseconds: 250),
-        alignment: 0.05,
+        curve: Curves.easeOut,
       );
     }
   }
 
   Future<bool> nextPage() async {
-    if (_atTrialEnd) return false;
     if (widget.readingMode == NovelReadingMode.horizontal) {
       if (_pageController?.hasClients ?? false) {
         final page = _pageController!.page?.round() ?? 0;
-        if (page >= _pages.length - 1) return _atTrialEnd;
+        if (page >= _pages.length - 1) return false;
         await _pageController!.nextPage(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
@@ -335,7 +430,7 @@ class TextReaderState extends State<TextReader> {
   }
 
   TextStyle _textStyle(Color fg) {
-    return TextStyle(
+    return DefaultTextStyle.of(context).style.copyWith(
       fontSize: widget.typography.fontSize,
       height: widget.typography.lineHeight,
       fontFamily: widget.typography.fontFamily,
@@ -344,10 +439,9 @@ class TextReaderState extends State<TextReader> {
     );
   }
 
-  TextAlign get _align =>
-      widget.typography.textAlign == TextAlignOption.justify
-          ? TextAlign.justify
-          : TextAlign.left;
+  TextAlign get _align => widget.typography.textAlign == TextAlignOption.justify
+      ? TextAlign.justify
+      : TextAlign.left;
 
   Widget _buildHorizontalPage(
     int index,
@@ -358,29 +452,28 @@ class TextReaderState extends State<TextReader> {
     return ColoredBox(
       color: bg,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(margin, margin, margin, margin * 1.5),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: bg,
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 6,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            child: ListView(
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                for (final para in _pages[index]) ...[
-                  Text(para, style: style, textAlign: _align),
-                  SizedBox(height: widget.typography.fontSize * 0.8),
-                ],
+        padding: _pagePadding(margin),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var j = 0; j < _pages[index].length; j++) ...[
+                if (j > 0) SizedBox(height: widget.typography.fontSize * 0.8),
+                ColoredBox(
+                  color:
+                      widget.highlightParagraphs.contains(
+                        _pages[index][j].paragraphIndex,
+                      )
+                      ? const Color(0x66FFEB3B)
+                      : Colors.transparent,
+                  child: Text(
+                    _pages[index][j].text,
+                    style: style,
+                    textAlign: _align,
+                  ),
+                ),
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -403,6 +496,14 @@ class TextReaderState extends State<TextReader> {
     final fg = widget.foregroundColor ?? const Color(0xFF222222);
     final style = _textStyle(fg);
     final margin = widget.typography.pageMargin;
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.of(context);
+    if (_scaler != scaler || _direction != direction) {
+      _scaler = scaler;
+      _direction = direction;
+      _layoutSize = null;
+      _pagesReady = false;
+    }
 
     return ColoredBox(
       color: bg,
@@ -422,7 +523,16 @@ class TextReaderState extends State<TextReader> {
           _paragraphs = book.paragraphs;
 
           final visibleStart = _firstReadableParagraph;
-          final visibleCount = _lastReadableParagraph - visibleStart + 1;
+          final visibleCount = (_lastReadableParagraph - visibleStart + 1)
+              .clamp(0, _paragraphs.length);
+          if (visibleCount == 0) {
+            return const Center(child: Text('No readable content'));
+          }
+
+          _currentParagraph = _currentParagraph.clamp(
+            _firstReadableParagraph,
+            _lastReadableParagraph,
+          );
 
           if (widget.readingMode == NovelReadingMode.horizontal) {
             return LayoutBuilder(
@@ -457,6 +567,7 @@ class TextReaderState extends State<TextReader> {
                       }
                       final p = _paragraphForPage(page);
                       _currentParagraph = p;
+                      _currentTextOffset = _pages[page].first.startOffset;
                       widget.onParagraphChanged?.call(p);
                     },
                     itemBuilder: (context, index) {
@@ -475,67 +586,66 @@ class TextReaderState extends State<TextReader> {
             );
           }
 
-          // Trailing spacer: scrolling onto it counts as past-trial gesture.
-          final trailHeight = _hasContentAfterTrial ? 96.0 : 0.0;
-          return _wrapFontPinch(
-            NotificationListener<ScrollNotification>(
-              onNotification: (n) {
-                if (_hasContentAfterTrial &&
-                    n is ScrollUpdateNotification &&
-                    _scrollController.hasClients) {
-                  final pos = _scrollController.position;
-                  final trailStart = pos.maxScrollExtent - trailHeight;
-                  if (pos.pixels > trailStart + 24) {
-                    _emitTrialBoundary(true);
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (!mounted || !_scrollController.hasClients) return;
-                      final p = _scrollController.position;
-                      final start = (p.maxScrollExtent - trailHeight)
-                          .clamp(0.0, p.maxScrollExtent);
-                      _scrollController.jumpTo(start);
-                    });
-                  }
-                }
-                return _onVerticalScroll(n);
-              },
-              child: CustomScrollView(
-                controller: _scrollController,
-                slivers: [
-                  SliverPadding(
-                    padding: EdgeInsets.fromLTRB(margin, 24, margin, 48),
-                    sliver: SliverList.separated(
-                      itemCount: visibleCount,
-                      separatorBuilder: (_, _) =>
-                          SizedBox(height: widget.typography.fontSize * 0.8),
-                      itemBuilder: (context, index) {
-                        final paragraphIndex = visibleStart + index;
-                        final highlighted =
-                            widget.highlightParagraphs.contains(paragraphIndex);
-                        return KeyedSubtree(
-                          key: _paragraphKeys[paragraphIndex],
-                          child: Container(
-                            color: highlighted
-                                ? const Color(0x66FFEB3B)
-                                : Colors.transparent,
-                            child: SelectableText(
-                              book.paragraphs[paragraphIndex],
-                              style: style,
-                              textAlign: _align,
-                              onTap: () {
-                                _currentParagraph = paragraphIndex;
-                                widget.onParagraphChanged?.call(paragraphIndex);
-                              },
-                            ),
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              _ensureVerticalLayout(
+                Size(constraints.maxWidth, constraints.maxHeight),
+                style,
+                margin,
+              );
+              if (_restoreScroll) {
+                _restoreScroll = false;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted || !_scrollController.hasClients) return;
+                  final i = _currentParagraph.clamp(
+                    _firstReadableParagraph,
+                    _lastReadableParagraph,
+                  );
+                  _scrollController.jumpTo(
+                    _offsetForParagraph(i)
+                        .clamp(0.0, _scrollController.position.maxScrollExtent),
+                  );
+                });
+              }
+              return _wrapFontPinch(
+                NotificationListener<ScrollNotification>(
+                  onNotification: (n) {
+                    if (n is ScrollUpdateNotification) {
+                      _reportVerticalPosition();
+                    }
+                    return _onVerticalScroll(n);
+                  },
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: EdgeInsets.symmetric(horizontal: margin),
+                    itemCount: visibleCount,
+                    itemExtentBuilder: (i, _) => _heights[visibleStart + i],
+                    itemBuilder: (context, i) {
+                      final index = visibleStart + i;
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: widget.typography.fontSize * 0.8,
+                        ),
+                        child: ColoredBox(
+                          color: widget.highlightParagraphs.contains(index)
+                              ? const Color(0x66FFEB3B)
+                              : Colors.transparent,
+                          child: SelectableText(
+                            book.paragraphs[index],
+                            style: style,
+                            textAlign: _align,
+                            onTap: () {
+                              _currentParagraph = index;
+                              widget.onParagraphChanged?.call(index);
+                            },
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   ),
-                  if (_hasContentAfterTrial)
-                    SliverToBoxAdapter(child: SizedBox(height: trailHeight)),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           );
         },
       ),
@@ -544,7 +654,6 @@ class TextReaderState extends State<TextReader> {
 }
 
 class _TextBook {
-  const _TextBook({required this.paragraphs, required this.chapters});
+  const _TextBook({required this.paragraphs});
   final List<String> paragraphs;
-  final List<NovelChapter> chapters;
 }

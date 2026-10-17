@@ -15,7 +15,7 @@ class ReaderSettings {
     this.comicBackground = 0xFF000000,
     this.tapZonesEnabled = true,
     this.immersive = true,
-  });
+  }) : assert(brightness >= 0 && brightness <= 1);
 
   final double brightness;
   final bool keepScreenOn;
@@ -26,8 +26,10 @@ class ReaderSettings {
   final ComicFitMode comicFitMode;
   final bool doublePage;
   final int comicBackground;
+
   /// Legacy: comic / novel / PDF taps always toggle the toolbar only
   /// (no tap-to-page). Kept for settings persistence compatibility.
+  @Deprecated('Tap gestures toggle the toolbar; this setting is ignored.')
   final bool tapZonesEnabled;
   final bool immersive;
 
@@ -50,10 +52,12 @@ class ReaderSettings {
       brightness: brightness ?? this.brightness,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       typography: typography ?? this.typography,
-      backgroundColor:
-          clearBackgroundColor ? null : (backgroundColor ?? this.backgroundColor),
-      foregroundColor:
-          clearForegroundColor ? null : (foregroundColor ?? this.foregroundColor),
+      backgroundColor: clearBackgroundColor
+          ? null
+          : (backgroundColor ?? this.backgroundColor),
+      foregroundColor: clearForegroundColor
+          ? null
+          : (foregroundColor ?? this.foregroundColor),
       novelReadingMode: novelReadingMode ?? this.novelReadingMode,
       comicFitMode: comicFitMode ?? this.comicFitMode,
       doublePage: doublePage ?? this.doublePage,
@@ -77,12 +81,36 @@ class NovelThemePreset {
   final int foreground;
 
   static const List<NovelThemePreset> defaults = [
-    NovelThemePreset(name: 'Cream', background: 0xFFFFF8E7, foreground: 0xFF222222),
-    NovelThemePreset(name: 'White', background: 0xFFFFFFFF, foreground: 0xFF111111),
-    NovelThemePreset(name: 'Sepia', background: 0xFFF4ECD8, foreground: 0xFF5B4636),
-    NovelThemePreset(name: 'Green', background: 0xFFCCE8CF, foreground: 0xFF1B3A22),
-    NovelThemePreset(name: 'Dark', background: 0xFF121212, foreground: 0xFFE0E0E0),
-    NovelThemePreset(name: 'AMOLED', background: 0xFF000000, foreground: 0xFFE8E8E8),
+    NovelThemePreset(
+      name: 'Cream',
+      background: 0xFFFFF8E7,
+      foreground: 0xFF222222,
+    ),
+    NovelThemePreset(
+      name: 'White',
+      background: 0xFFFFFFFF,
+      foreground: 0xFF111111,
+    ),
+    NovelThemePreset(
+      name: 'Sepia',
+      background: 0xFFF4ECD8,
+      foreground: 0xFF5B4636,
+    ),
+    NovelThemePreset(
+      name: 'Green',
+      background: 0xFFCCE8CF,
+      foreground: 0xFF1B3A22,
+    ),
+    NovelThemePreset(
+      name: 'Dark',
+      background: 0xFF121212,
+      foreground: 0xFFE0E0E0,
+    ),
+    NovelThemePreset(
+      name: 'AMOLED',
+      background: 0xFF000000,
+      foreground: 0xFFE8E8E8,
+    ),
   ];
 }
 

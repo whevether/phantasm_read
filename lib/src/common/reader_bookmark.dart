@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:synchronized/synchronized.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A bookmark for comic page or novel location.
@@ -13,6 +15,7 @@ class ReaderBookmark {
     this.paragraphIndex,
     this.note,
     this.createdAt,
+    this.positionVersion = 2,
   });
 
   final String id;
@@ -23,20 +26,23 @@ class ReaderBookmark {
   final int? paragraphIndex;
   final String? note;
   final DateTime? createdAt;
+  final int positionVersion;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'bookId': bookId,
-        'title': title,
-        'pageIndex': pageIndex,
-        'cfi': cfi,
-        'paragraphIndex': paragraphIndex,
-        'note': note,
-        'createdAt': (createdAt ?? DateTime.now()).toIso8601String(),
-      };
+    'positionVersion': positionVersion,
+    'id': id,
+    'bookId': bookId,
+    'title': title,
+    'pageIndex': pageIndex,
+    'cfi': cfi,
+    'paragraphIndex': paragraphIndex,
+    'note': note,
+    'createdAt': (createdAt ?? DateTime.now()).toIso8601String(),
+  };
 
   factory ReaderBookmark.fromJson(Map<String, dynamic> json) {
     return ReaderBookmark(
+      positionVersion: json['positionVersion'] as int? ?? 1,
       id: json['id'] as String? ?? '',
       bookId: json['bookId'] as String? ?? '',
       title: json['title'] as String? ?? '',
@@ -72,15 +78,15 @@ class ReaderHighlight {
   final DateTime? createdAt;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'bookId': bookId,
-        'excerpt': excerpt,
-        'cfi': cfi,
-        'paragraphIndex': paragraphIndex,
-        'color': color,
-        'note': note,
-        'createdAt': (createdAt ?? DateTime.now()).toIso8601String(),
-      };
+    'id': id,
+    'bookId': bookId,
+    'excerpt': excerpt,
+    'cfi': cfi,
+    'paragraphIndex': paragraphIndex,
+    'color': color,
+    'note': note,
+    'createdAt': (createdAt ?? DateTime.now()).toIso8601String(),
+  };
 
   factory ReaderHighlight.fromJson(Map<String, dynamic> json) {
     return ReaderHighlight(
@@ -99,6 +105,8 @@ class ReaderHighlight {
 class ReaderBookmarkStore {
   ReaderBookmarkStore._();
   static final ReaderBookmarkStore instance = ReaderBookmarkStore._();
+
+  final _lock = Lock();
 
   static const _bmPrefix = 'phantasm_bookmarks_';
   static const _hlPrefix = 'phantasm_highlights_';
@@ -126,15 +134,17 @@ class ReaderBookmarkStore {
     );
   }
 
-  Future<void> addBookmark(ReaderBookmark bookmark) async {
-    final list = [...await listBookmarks(bookmark.bookId), bookmark];
-    await saveBookmarks(bookmark.bookId, list);
-  }
+  Future<void> addBookmark(ReaderBookmark bookmark) =>
+      _lock.synchronized(() async {
+        final list = [...await listBookmarks(bookmark.bookId), bookmark];
+        await saveBookmarks(bookmark.bookId, list);
+      });
 
-  Future<void> removeBookmark(String bookId, String id) async {
-    final list = await listBookmarks(bookId);
-    await saveBookmarks(bookId, list.where((e) => e.id != id).toList());
-  }
+  Future<void> removeBookmark(String bookId, String id) =>
+      _lock.synchronized(() async {
+        final list = await listBookmarks(bookId);
+        await saveBookmarks(bookId, list.where((e) => e.id != id).toList());
+      });
 
   Future<List<ReaderHighlight>> listHighlights(String bookId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -151,7 +161,10 @@ class ReaderBookmarkStore {
     }
   }
 
-  Future<void> saveHighlights(String bookId, List<ReaderHighlight> items) async {
+  Future<void> saveHighlights(
+    String bookId,
+    List<ReaderHighlight> items,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       '$_hlPrefix$bookId',
@@ -159,21 +172,60 @@ class ReaderBookmarkStore {
     );
   }
 
-  Future<void> addHighlight(ReaderHighlight highlight) async {
-    final list = [...await listHighlights(highlight.bookId), highlight];
-    await saveHighlights(highlight.bookId, list);
-  }
+  Future<void> addHighlight(ReaderHighlight highlight) =>
+      _lock.synchronized(() async {
+        final list = [...await listHighlights(highlight.bookId), highlight];
+        await saveHighlights(highlight.bookId, list);
+      });
 
-  Future<void> removeHighlight(String bookId, String id) async {
-    final list = await listHighlights(bookId);
-    await saveHighlights(bookId, list.where((e) => e.id != id).toList());
-  }
+  Future<void> removeHighlight(String bookId, String id) =>
+      _lock.synchronized(() async {
+        final list = await listHighlights(bookId);
+        await saveHighlights(bookId, list.where((e) => e.id != id).toList());
+      });
+
+  /// Copies known legacy records without removing the original keys.
+  Future<void> migrate(String oldBookId, String newBookId) =>
+      _lock.synchronized(() async {
+        final oldBookmarks = await listBookmarks(oldBookId);
+        final oldHighlights = await listHighlights(oldBookId);
+        if ((await listBookmarks(newBookId)).isEmpty) {
+          await saveBookmarks(
+            newBookId,
+            oldBookmarks
+                .map(
+                  (b) => ReaderBookmark.fromJson({
+                    ...b.toJson(),
+                    'bookId': newBookId,
+                  }),
+                )
+                .toList(),
+          );
+        }
+        if ((await listHighlights(newBookId)).isEmpty) {
+          await saveHighlights(
+            newBookId,
+            oldHighlights
+                .map(
+                  (h) => ReaderHighlight.fromJson({
+                    ...h.toJson(),
+                    'bookId': newBookId,
+                  }),
+                )
+                .toList(),
+          );
+        }
+      });
 
   /// Export bookmarks + highlights as JSON map.
   Future<Map<String, dynamic>> exportJson(String bookId) async {
     return {
-      'bookmarks': (await listBookmarks(bookId)).map((e) => e.toJson()).toList(),
-      'highlights': (await listHighlights(bookId)).map((e) => e.toJson()).toList(),
+      'bookmarks': (await listBookmarks(bookId))
+          .map((e) => e.toJson())
+          .toList(),
+      'highlights': (await listHighlights(bookId))
+          .map((e) => e.toJson())
+          .toList(),
     };
   }
 }

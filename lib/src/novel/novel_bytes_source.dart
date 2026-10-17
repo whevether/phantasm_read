@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'file_bytes.dart';
+import '../common/reader_identity.dart';
 
 /// Resolve novel content bytes from path / asset / url / raw bytes.
 sealed class NovelBytesSource {
@@ -15,6 +16,14 @@ sealed class NovelBytesSource {
     return NovelBytesMemory(bytes, name: name);
   }
 
+  String get stableId => switch (this) {
+    NovelBytesFile(:final path) => readerIdentity('novel_file', [path]),
+    NovelBytesAsset(:final assetPath) => readerIdentity('novel_asset', [
+      assetPath,
+    ]),
+    NovelBytesUrl(:final url) => readerIdentity('novel_url', [url]),
+    NovelBytesMemory(:final bytes) => readerBytesIdentity('novel_bytes', bytes),
+  };
   Future<Uint8List> load();
   String get displayName;
 }
@@ -40,7 +49,7 @@ final class NovelBytesAsset extends NovelBytesSource {
   @override
   Future<Uint8List> load() async {
     final data = await rootBundle.load(assetPath);
-    return data.buffer.asUint8List();
+    return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
   }
 }
 

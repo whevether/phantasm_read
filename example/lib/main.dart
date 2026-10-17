@@ -60,7 +60,7 @@ class _HomePageState extends State<_HomePage> {
           body: ListView(
             children: [
               const ListTile(
-                title: Text('0.0.3 演示'),
+                title: Text('0.0.8 演示'),
                 subtitle: Text('常用功能默认开启 · 扩展能力见下方设置'),
               ),
               ListTile(
@@ -228,16 +228,21 @@ class _ComicDemoPageState extends State<_ComicDemoPage> {
     _settings = _settings.copyWith(doublePage: widget.options.comicDoublePage);
     widget.options.addListener(_onOptionsChanged);
   }
+
   @override
   void dispose() {
     widget.options.removeListener(_onOptionsChanged);
     super.dispose();
   }
+
   void _onOptionsChanged() {
     setState(() {
-      _settings = _settings.copyWith(doublePage: widget.options.comicDoublePage);
+      _settings = _settings.copyWith(
+        doublePage: widget.options.comicDoublePage,
+      );
     });
   }
+
   @override
   Widget build(BuildContext context) {
     final o = widget.options;
@@ -388,7 +393,10 @@ class _TextNovelDemoPageState extends State<_TextNovelDemoPage> {
           ),
           body: NovelReader(
             bookId: _bookId,
-            source: NovelSource.textBytes(_sampleBytes, name: 'phantasm_sample.txt'),
+            source: NovelSource.textBytes(
+              _sampleBytes,
+              name: 'phantasm_sample.txt',
+            ),
             settings: _settings,
             persistSettings: false,
             trialLimit: o.novelTrialLimit,

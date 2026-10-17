@@ -39,10 +39,11 @@ void main() {
   });
 
   test('searchParagraphs', () {
-    final hits = searchParagraphs(
-      ['hello world', 'foo bar', 'hello again'],
-      query: 'hello',
-    );
+    final hits = searchParagraphs([
+      'hello world',
+      'foo bar',
+      'hello again',
+    ], query: 'hello');
     expect(hits.length, 2);
   });
 

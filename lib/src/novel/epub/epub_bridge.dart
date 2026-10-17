@@ -1,150 +1,156 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../novel_chapter.dart';
 
-/// Dart ↔ epub.js bridge over [WebViewController].
+/// Correlates asynchronous JS replies; native evaluateJavascript need not await JS.
+class EpubRequestBroker {
+  EpubRequestBroker(this.execute, {this.timeout = const Duration(seconds: 45)});
+  final Future<void> Function(String) execute;
+  final Duration timeout;
+  final _pending = <int, Completer<dynamic>>{};
+  int _nextId = 0;
+  bool _closed = false;
+
+  Future<dynamic> call(String method, [List<Object?> args = const []]) async {
+    if (_closed) throw StateError('EPUB bridge is closed');
+    final id = ++_nextId;
+    final completer = Completer<dynamic>();
+    _pending[id] = completer;
+    // Install the error/timeout handler before executing a synchronous test bridge.
+    final result = completer.future.timeout(timeout);
+    void fail(Object error, StackTrace stack) {
+      if (!completer.isCompleted) completer.completeError(error, stack);
+    }
+
+    try {
+      unawaited(
+        execute(
+          'window.epubBridge.request($id, ${jsonEncode(method)}, ${jsonEncode(args)})',
+        ).then<void>((_) {}, onError: fail),
+      );
+    } catch (error, stack) {
+      fail(error, stack);
+    }
+    try {
+      return await result;
+    } finally {
+      _pending.remove(id);
+    }
+  }
+
+  void receive(dynamic payload) {
+    if (payload is! Map || payload['id'] is! int) return;
+    final pending = _pending.remove(payload['id']);
+    if (pending == null || pending.isCompleted) return;
+    if (payload['error'] != null) {
+      pending.completeError(StateError('${payload['error']}'));
+    } else {
+      pending.complete(payload['result']);
+    }
+  }
+
+  void dispose() {
+    _closed = true;
+    for (final pending in _pending.values) {
+      if (!pending.isCompleted) {
+        pending.completeError(StateError('EPUB bridge disposed'));
+      }
+    }
+    _pending.clear();
+  }
+}
+
 class EpubBridge {
-  EpubBridge(this.controller);
-
+  EpubBridge(this.controller)
+    : requests = EpubRequestBroker(controller.runJavaScript);
   final WebViewController controller;
-
-  Future<void> openFromBase64(String base64, {String flow = 'paginated'}) {
-    final encoded = jsonEncode(base64);
-    final flowArg = jsonEncode(flow);
-    return controller.runJavaScript(
-      'window.epubBridge.openFromBase64($encoded, $flowArg)',
-    );
-  }
-
-  Future<void> next() =>
-      controller.runJavaScript('window.epubBridge.next()');
-
-  Future<void> prev() =>
-      controller.runJavaScript('window.epubBridge.prev()');
-
-  Future<void> display(String? target) {
-    final arg = target == null ? 'null' : jsonEncode(target);
-    return controller.runJavaScript('window.epubBridge.display($arg)');
-  }
-
+  final EpubRequestBroker requests;
+  void dispose() => requests.dispose();
+  void receive(dynamic payload) => requests.receive(payload);
+  Future<void> openFromBase64(
+    String base64, {
+    String flow = 'paginated',
+    int? trialStart,
+    int? trialCount,
+    String? initialCfi,
+  }) async => requests.call('openFromBase64', [
+    base64,
+    flow,
+    trialStart,
+    trialCount,
+    initialCfi,
+  ]);
+  Future<void> next() async => requests.call('next');
+  Future<void> prev() async => requests.call('prev');
+  Future<void> display(String? target) async =>
+      requests.call('display', [target]);
   Future<void> goToChapter(String href) => display(href);
-
   Future<List<NovelChapter>> getToc() async {
-    final raw = await controller.runJavaScriptReturningResult(
-      'window.epubBridge.getToc()',
-    );
-    final text = _stringifyJsResult(raw);
-    if (text.isEmpty || text == 'null') return const [];
-    final decoded = jsonDecode(text);
-    if (decoded is! List) return const [];
-    return decoded
+    final result = await requests.call('getToc');
+    if (result is! List) throw const FormatException('Invalid EPUB TOC reply');
+    return result
         .whereType<Map>()
         .map((e) => NovelChapter.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
 
-  Future<void> setFlow(String flow) {
-    return controller.runJavaScript(
-      'window.epubBridge.setFlow(${jsonEncode(flow)})',
-    );
-  }
-
+  Future<void> setFlow(String flow) async => requests.call('setFlow', [flow]);
   Future<List<Map<String, String>>> search(String query) async {
-    final raw = await controller.runJavaScriptReturningResult(
-      'window.epubBridge.search(${jsonEncode(query)})',
-    );
-    final text = _stringifyJsResult(raw);
-    if (text.isEmpty || text == 'null') return const [];
-    try {
-      final decoded = jsonDecode(text);
-      if (decoded is! List) return const [];
-      return decoded
-          .whereType<Map>()
-          .map(
-            (e) => {
-              'cfi': '${e['cfi'] ?? ''}',
-              'excerpt': '${e['excerpt'] ?? ''}',
-            },
-          )
-          .toList();
-    } catch (_) {
-      return const [];
+    final result = await requests.call('search', [query]);
+    if (result is! List) {
+      throw const FormatException('Invalid EPUB search reply');
     }
+    return result
+        .whereType<Map>()
+        .map(
+          (e) => {
+            'cfi': '${e['cfi'] ?? ''}',
+            'excerpt': '${e['excerpt'] ?? ''}',
+          },
+        )
+        .toList();
   }
 
   Future<Map<String, dynamic>?> getLocation() async {
-    final raw = await controller.runJavaScriptReturningResult(
-      'JSON.stringify(await window.epubBridge.getLocation())',
-    );
-    final text = _stringifyJsResult(raw);
-    if (text.isEmpty || text == 'null') return null;
-    try {
-      final decoded = jsonDecode(text);
-      if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
-      }
-    } catch (_) {}
-    return null;
+    final result = await requests.call('getLocation');
+    return result is Map ? Map<String, dynamic>.from(result) : null;
   }
 
-  Future<void> setFontSize(double fontSizePx) {
-    final percent = ((fontSizePx / 18.0) * 100).clamp(50, 300).round();
-    return controller.runJavaScript(
-      'window.epubBridge.setFontSize($percent)',
-    );
-  }
-
-  Future<void> setFontFamily(String? family) {
-    if (family == null || family.isEmpty) return Future.value();
-    return controller.runJavaScript(
-      'window.epubBridge.setFontFamily(${jsonEncode(family)})',
-    );
-  }
-
-  Future<void> setLineHeight(double lineHeight) {
-    return controller.runJavaScript(
-      'window.epubBridge.setLineHeight(${jsonEncode(lineHeight.toString())})',
-    );
-  }
-
+  Future<String> getText() async => '${await requests.call('getText') ?? ''}';
+  Future<void> setFontSize(double px) async =>
+      requests.call('setFontSize', [((px / 18) * 100).clamp(50, 300).round()]);
+  Future<void> setFontFamily(String? family) async =>
+      requests.call('setFontFamily', [family]);
+  Future<void> setLineHeight(double height) async =>
+      requests.call('setLineHeight', [height]);
+  Future<void> setTypography({
+    required double letterSpacing,
+    required double margin,
+    required String textAlign,
+  }) async =>
+      requests.call('setTypography', [letterSpacing, margin, textAlign]);
   Future<void> setTheme({
     required String background,
     required String foreground,
-  }) {
-    return controller.runJavaScript(
-      'window.epubBridge.setTheme(${jsonEncode(background)}, ${jsonEncode(foreground)})',
-    );
-  }
-
-  String _stringifyJsResult(Object? raw) {
-    if (raw == null) return '';
-    if (raw is String) {
-      // Android may wrap the returned string with extra quotes.
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is String) return decoded;
-        return raw;
-      } catch (_) {
-        return raw;
-      }
-    }
-    return raw.toString();
-  }
+  }) async => requests.call('setTheme', [background, foreground]);
 }
 
 class EpubBridgeMessage {
   EpubBridgeMessage({required this.type, this.payload});
-
   factory EpubBridgeMessage.parse(String raw) {
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return EpubBridgeMessage(
-      type: map['type'] as String? ?? '',
-      payload: map['payload'],
-    );
+    try {
+      final map = jsonDecode(raw);
+      if (map is Map && map['type'] is String) {
+        return EpubBridgeMessage(type: map['type'], payload: map['payload']);
+      }
+    } catch (_) {
+      /* Ignore non-protocol messages from a document. */
+    }
+    return EpubBridgeMessage(type: 'invalid');
   }
-
   final String type;
   final dynamic payload;
 }

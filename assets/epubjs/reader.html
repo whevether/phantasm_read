@@ -1,225 +1,397 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>EPUB Reader</title>
-  <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
-    #viewer { width: 100%; height: 100%; }
-    #viewer .epub-container { width: 100% !important; height: 100% !important; }
-  </style>
-  <script src="jszip.min.js"></script>
-  <script src="epub.min.js"></script>
-</head>
-<body>
-  <div id="viewer"></div>
-  <script>
-    let book = null;
-    let rendition = null;
-    let currentFlow = 'paginated';
-    let fontSizePercent = 100;
-    let lastPinchDistance = 0;
-
-    function pinchDistance(touches) {
-      const dx = touches[0].clientX - touches[1].clientX;
-      const dy = touches[0].clientY - touches[1].clientY;
-      return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    function applyFontSizePercent() {
-      if (!rendition) return;
-      rendition.themes.fontSize(String(fontSizePercent) + '%');
-      post('fontSizeChanged', { percent: fontSizePercent });
-    }
-
-    function bindFontPinch() {
-      const root = document.body;
-
-      root.addEventListener('touchstart', function (e) {
-        if (e.touches.length === 2) {
-          lastPinchDistance = pinchDistance(e.touches);
-          e.preventDefault();
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EPUB Reader</title>
+    <style>
+      html,
+      body,
+      #viewer {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      body {
+        background: #fff;
+      }
+    </style>
+    <script src="jszip.min.js"></script>
+    <script src="epub.min.js"></script>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script>
+      "use strict";
+      let book = null,
+        rendition = null,
+        toc = [],
+        flat = [],
+        flatBounds = [],
+        flow = "paginated",
+        lastCfi = null;
+      let trialStart = null,
+        trialCount = null,
+        startBoundary = null,
+        endBoundary = null,
+        opening = 0;
+      const cfiUtil = () => new ePub.CFI();
+      function post(type, payload) {
+        if (window.EpubChannel)
+          window.EpubChannel.postMessage(JSON.stringify({ type, payload }));
+      }
+      function flatten(items) {
+        return (items || []).flatMap((i) => [i, ...flatten(i.subitems)]);
+      }
+      function simplify(items) {
+        return (items || []).map((i) => ({
+          label: i.label || "",
+          href: i.href || "",
+          children: simplify(i.subitems),
+        }));
+      }
+      function sectionFor(target) {
+        try {
+          return book.spine.get(target);
+        } catch (_) {
+          return null;
         }
-      }, { passive: false });
-
-      root.addEventListener('touchmove', function (e) {
-        if (e.touches.length === 2) {
-          const dist = pinchDistance(e.touches);
-          if (lastPinchDistance > 0) {
-            const ratio = dist / lastPinchDistance;
-            fontSizePercent = Math.min(300, Math.max(50, fontSizePercent * ratio));
-            applyFontSizePercent();
+      }
+      async function boundary(item) {
+        if (!item) return null;
+        const section = sectionFor(item.href);
+        if (!section) return null;
+        await section.load(book.load.bind(book));
+        const hash = item.href.split("#")[1];
+        const element = hash
+          ? section.document.getElementById(decodeURIComponent(hash))
+          : section.document.body;
+        if (!element) throw new Error("Unresolved chapter anchor");
+        const result = {
+          index: section.index,
+          hash: hash ? decodeURIComponent(hash) : null,
+          cfi: section.cfiFromElement(element),
+          href: item.href,
+        };
+        section.unload();
+        return result;
+      }
+      function compare(a, b) {
+        return cfiUtil().compare(a, b);
+      }
+      function allowed(cfi) {
+        return (
+          (!startBoundary || compare(cfi, startBoundary.cfi) >= 0) &&
+          (!endBoundary || compare(cfi, endBoundary.cfi) < 0)
+        );
+      }
+      function readableSection(index) {
+        return (
+          (!startBoundary || index >= startBoundary.index) &&
+          (!endBoundary || index <= endBoundary.index)
+        );
+      }
+      function trimAt(node, before) {
+        // Preserve element positions in the DOM so original CFIs stay valid.
+        while (node && node.parentNode && node !== node.ownerDocument.body) {
+          let sibling = before ? node.previousSibling : node.nextSibling;
+          while (sibling) {
+            if (sibling.nodeType === 1)
+              sibling.style.setProperty("display", "none", "important");
+            else if (sibling.nodeType === 3) sibling.textContent = "";
+            sibling = before ? sibling.previousSibling : sibling.nextSibling;
           }
-          lastPinchDistance = dist;
+          node = node.parentNode;
+        }
+      }
+      function clipContent(contents) {
+        const doc = contents.document,
+          index = contents.sectionIndex;
+        if (!readableSection(index)) {
+          doc.body.style.display = "none";
+          return;
+        }
+        if (
+          startBoundary &&
+          index === startBoundary.index &&
+          startBoundary.hash
+        ) {
+          const n = doc.getElementById(startBoundary.hash);
+          if (n) trimAt(n, true);
+        }
+        if (endBoundary && index === endBoundary.index) {
+          if (!endBoundary.hash) {
+            doc.body.style.display = "none";
+            return;
+          }
+          const n = doc.getElementById(endBoundary.hash);
+          if (n) {
+            trimAt(n, false);
+            n.style.setProperty("display", "none", "important");
+          }
+        }
+      }
+      function chapterAt(cfi) {
+        let hit = 0;
+        for (let i = 0; i < flatBounds.length; i++)
+          if (flatBounds[i] && compare(cfi, flatBounds[i].cfi) >= 0) hit = i;
+        return hit;
+      }
+      function wireContents(contents) {
+        clipContent(contents);
+        const doc = contents.document;
+        let base = 0,
+          font = 100;
+        doc.addEventListener(
+          "touchstart",
+          (e) => {
+            if (e.touches.length === 2) {
+              base = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY,
+              );
+              font = fontSize;
+            }
+          },
+          { passive: true },
+        );
+        doc.addEventListener(
+          "touchmove",
+          (e) => {
+            if (e.touches.length !== 2 || !base) return;
+            const d = Math.hypot(
+              e.touches[0].clientX - e.touches[1].clientX,
+              e.touches[0].clientY - e.touches[1].clientY,
+            );
+            fontSize = Math.min(200, Math.max(66.667, (font * d) / base));
+            rendition.themes.fontSize(fontSize + "%");
+            post("fontSizeChanged", { percent: fontSize });
+            e.preventDefault();
+          },
+          { passive: false },
+        );
+        doc.addEventListener("click", (e) => {
+          const a = e.target.closest && e.target.closest("a[href]");
+          if (!a) return;
           e.preventDefault();
-        }
-      }, { passive: false });
-
-      root.addEventListener('touchend', function (e) {
-        if (e.touches.length < 2) lastPinchDistance = 0;
-      }, { passive: false });
-    }
-
-    bindFontPinch();
-
-    function post(type, payload) {
-      try {
-        if (window.EpubChannel && window.EpubChannel.postMessage) {
-          window.EpubChannel.postMessage(JSON.stringify({ type: type, payload: payload || null }));
-        }
-      } catch (e) {}
-    }
-
-    function base64ToArrayBuffer(base64) {
-      const binary = atob(base64);
-      const len = binary.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-      return bytes.buffer;
-    }
-
-    function simplifyToc(items) {
-      return (items || []).map(function (item) {
-        return {
-          label: item.label || '',
-          href: item.href || '',
-          children: simplifyToc(item.subitems || [])
-        };
-      });
-    }
-
-    function bindRelocated() {
-      if (!rendition) return;
-      rendition.on('relocated', function (location) {
-        const cfi = location && location.start ? location.start.cfi : null;
-        const percentage = (location && location.start && location.start.percentage != null)
-          ? location.start.percentage
-          : null;
-        post('locationChanged', { cfi: cfi, percentage: percentage });
-      });
-    }
-
-    async function ensureRendition() {
-      if (!book) throw new Error('book not opened');
-      if (!rendition) {
-        const opts = {
-          width: '100%',
-          height: '100%',
-          flow: currentFlow || 'paginated',
-          allowScriptedContent: true
-        };
-        if (currentFlow === 'scrolled') {
-          opts.manager = 'continuous';
-        }
-        rendition = book.renderTo('viewer', opts);
-        bindRelocated();
-      }
-      return rendition;
-    }
-
-    async function recreateRendition(keepCfi) {
-      let cfi = keepCfi || null;
-      if (!cfi && rendition) {
-        try {
-          const loc = rendition.currentLocation();
-          if (loc && loc.start) cfi = loc.start.cfi;
-        } catch (e) {}
-      }
-      if (rendition) {
-        try { rendition.destroy(); } catch (e) {}
-        rendition = null;
-        const el = document.getElementById('viewer');
-        if (el) el.innerHTML = '';
-      }
-      await ensureRendition();
-      await rendition.display(cfi || undefined);
-    }
-
-    window.epubBridge = {
-      async openFromBase64(base64, flow) {
-        try {
-          if (flow) currentFlow = flow;
-          if (book) { try { book.destroy(); } catch (e) {} }
-          book = ePub(base64ToArrayBuffer(base64));
-          rendition = null;
-          const el = document.getElementById('viewer');
-          if (el) el.innerHTML = '';
-          await ensureRendition();
-          await rendition.display();
-          post('ready', { ok: true });
-          return true;
-        } catch (e) {
-          post('error', { message: String(e && e.message ? e.message : e) });
-          throw e;
-        }
-      },
-      async next() {
-        if (!rendition) return;
-        await rendition.next();
-      },
-      async prev() {
-        if (!rendition) return;
-        await rendition.prev();
-      },
-      async display(target) {
-        if (!rendition) return;
-        await rendition.display(target || undefined);
-      },
-      async getToc() {
-        if (!book) return '[]';
-        const nav = await book.loaded.navigation;
-        return JSON.stringify(simplifyToc(nav && nav.toc ? nav.toc : []));
-      },
-      async getLocation() {
-        if (!rendition) return null;
-        const loc = rendition.currentLocation();
-        if (!loc || !loc.start) return null;
-        return { cfi: loc.start.cfi, percentage: loc.start.percentage };
-      },
-      async setFlow(flow) {
-        currentFlow = flow === 'scrolled' ? 'scrolled' : 'paginated';
-        if (!book) return;
-        await recreateRendition();
-      },
-      async search(query) {
-    if (!book || !query) return '[]';
-    try {
-      const results = await book.search(query);
-      const mapped = (results || []).slice(0, 50).map(function (r) {
-        return {
-          cfi: r.cfi || (r.excerpt && r.excerpt.cfi) || '',
-          excerpt: (r.excerpt && (r.excerpt.cfirange || r.excerpt.excerpt || r.excerpt)) || String(r)
-        };
-      });
-      return JSON.stringify(mapped);
-    } catch (e) {
-      return '[]';
-    }
-  },
-  setFontSize(percent) {
-        if (!rendition) return;
-        fontSizePercent = percent;
-        rendition.themes.fontSize(String(percent) + '%');
-      },
-      setFontFamily(family) {
-        if (!rendition || !family) return;
-        rendition.themes.font(family);
-      },
-      setLineHeight(value) {
-        if (!rendition) return;
-        rendition.themes.default({ body: { 'line-height': String(value) } });
-      },
-      setTheme(bg, fg) {
-        if (!rendition) return;
-        document.body.style.background = bg || '#ffffff';
-        rendition.themes.default({
-          body: { background: bg || '#ffffff', color: fg || '#000000' }
+          const href = a.getAttribute("href");
+          if (/^(?:https?:|mailto:|javascript:|data:)/i.test(href)) return;
+          bridge
+            .display(
+              href.startsWith("#") ? book.spine.get(index).href + href : href,
+            )
+            .catch((error) => post("error", { message: String(error) }));
         });
       }
-    };
-
-    post('shellReady', {});
-  </script>
-</body>
+      let fontSize = 100;
+      async function makeRendition(target) {
+        if (rendition) rendition.destroy();
+        document.getElementById("viewer").innerHTML = "";
+        rendition = book.renderTo("viewer", {
+          width: "100%",
+          height: "100%",
+          flow,
+          manager: flow === "scrolled" ? "continuous" : "default",
+          allowScriptedContent: false,
+          allowPopups: false,
+        });
+        rendition.hooks.content.register(wireContents);
+        rendition.on("relocated", (location) => {
+          const start = location && location.start;
+          if (!start) return;
+          if (!allowed(start.cfi)) {
+            const next =
+              !!endBoundary && compare(start.cfi, endBoundary.cfi) >= 0;
+            post("trialBoundary", { next });
+            rendition
+              .display(lastCfi || (startBoundary && startBoundary.href))
+              .catch((error) => post("error", { message: String(error) }));
+            return;
+          }
+          lastCfi = start.cfi;
+          const total = book.spine.length || 1;
+          post("locationChanged", {
+            cfi: start.cfi,
+            chapterIndex: chapterAt(start.cfi),
+            percentage:
+              typeof start.percentage === "number"
+                ? start.percentage
+                : (start.index +
+                    (start.displayed.page - 1) /
+                      Math.max(1, start.displayed.total)) /
+                  total,
+          });
+        });
+        await rendition.display(
+          target || (startBoundary && startBoundary.href) || undefined,
+        );
+      }
+      const bridge = {
+        request(id, method, args) {
+          Promise.resolve()
+            .then(() => {
+              if (method === "request" || typeof bridge[method] !== "function")
+                throw new Error("Unknown bridge method");
+              return bridge[method](...args);
+            })
+            .then(
+              (result) =>
+                post("response", {
+                  id,
+                  result: result === undefined ? null : result,
+                }),
+              (error) =>
+                post("response", {
+                  id,
+                  error: String((error && error.message) || error),
+                }),
+            );
+        },
+        async openFromBase64(base64, newFlow, start, count, initialCfi) {
+          const version = ++opening;
+          flow = newFlow || "paginated";
+          trialStart = start;
+          trialCount = count;
+          if (rendition) {
+            rendition.destroy();
+            rendition = null;
+          }
+          if (book) book.destroy();
+          lastCfi = null;
+          const binary = atob(base64),
+            bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++)
+            bytes[i] = binary.charCodeAt(i);
+          book = ePub(bytes.buffer);
+          await book.ready;
+          const nav = await book.loaded.navigation;
+          if (version !== opening) return;
+          toc = nav.toc || [];
+          flat = flatten(toc);
+          flatBounds = [];
+          for (const item of flat) flatBounds.push(await boundary(item));
+          startBoundary = null;
+          endBoundary = null;
+          if (count != null && count > 0) {
+            if (!flat.length || start < 0 || start >= flat.length)
+              throw new Error("No readable chapters in trial window");
+            startBoundary = flatBounds[start];
+            endBoundary = flatBounds[start + count] || null;
+          }
+          const target = initialCfi && allowed(initialCfi) ? initialCfi : null;
+          await makeRendition(target);
+          return true;
+        },
+        async next() {
+          if (rendition) await rendition.next();
+        },
+        async prev() {
+          if (rendition) await rendition.prev();
+        },
+        async display(target) {
+          if (!rendition) return;
+          if (target && target.startsWith("epubcfi(")) {
+            if (!allowed(target)) {
+              post("trialBoundary", {
+                next: !!endBoundary && compare(target, endBoundary.cfi) >= 0,
+              });
+              return;
+            }
+          } else if (target) {
+            const b = await boundary({ href: target });
+            if (!b || !allowed(b.cfi)) {
+              post("trialBoundary", {
+                next:
+                  !b || (!!endBoundary && compare(b.cfi, endBoundary.cfi) >= 0),
+              });
+              return;
+            }
+          }
+          await rendition.display(target || undefined);
+        },
+        getToc() {
+          return simplify(toc);
+        },
+        getLocation() {
+          const loc = rendition && rendition.currentLocation();
+          return loc && loc.start
+            ? { cfi: loc.start.cfi, percentage: loc.start.percentage }
+            : null;
+        },
+        async setFlow(value) {
+          flow = value === "scrolled" ? "scrolled" : "paginated";
+          if (book) await makeRendition(lastCfi);
+        },
+        async search(query) {
+          if (!book || !query) return [];
+          const hits = [];
+          for (const section of book.spine.spineItems) {
+            if (!readableSection(section.index)) continue;
+            try {
+              await section.load(book.load.bind(book));
+              for (const result of section.find(query)) {
+                if (allowed(result.cfi))
+                  hits.push({ cfi: result.cfi, excerpt: result.excerpt });
+                if (hits.length >= 50) break;
+              }
+            } finally {
+              section.unload();
+            }
+            if (hits.length >= 50) break;
+          }
+          return hits;
+        },
+        getText() {
+          return rendition
+            ? rendition
+                .getContents()
+                .filter(
+                  (c) =>
+                    c.document.defaultView.getComputedStyle(c.document.body)
+                      .display !== "none",
+                )
+                .map((c) => c.document.body.innerText)
+                .join("\n")
+            : "";
+        },
+        setFontSize(percent) {
+          fontSize = percent;
+          if (rendition) rendition.themes.fontSize(percent + "%");
+        },
+        setFontFamily(family) {
+          if (rendition) rendition.themes.font(family || "initial");
+        },
+        setLineHeight(value) {
+          if (rendition)
+            rendition.themes.override("line-height", String(value));
+        },
+        setTypography(spacing, margin, align) {
+          if (rendition) {
+            rendition.themes.override("letter-spacing", spacing + "px");
+            rendition.themes.override("padding", margin + "px");
+            rendition.themes.override("text-align", align);
+            rendition.themes.override("box-sizing", "border-box");
+          }
+        },
+        setTheme(bg, fg) {
+          document.body.style.background = bg;
+          if (rendition) {
+            rendition.themes.override("background", bg);
+            rendition.themes.override("color", fg);
+          }
+        },
+        close() {
+          opening++;
+          if (rendition) rendition.destroy();
+          if (book) book.destroy();
+          rendition = null;
+          book = null;
+        },
+      };
+      window.epubBridge = bridge;
+      post("shellReady", {});
+    </script>
+  </body>
 </html>

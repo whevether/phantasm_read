@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-Cross-platform Flutter comic / novel / PDF reader package (`0.0.7`).
+Cross-platform Flutter comic / novel / PDF reader package (`0.0.8`).
 
 [中文文档](README_zh.md)
 
@@ -12,7 +12,7 @@ Cross-platform Flutter comic / novel / PDF reader package (`0.0.7`).
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.7
+  phantasm_read: ^0.0.8
 ```
 
 License: [MIT](LICENSE)
@@ -53,7 +53,7 @@ PdfReader(
 |------|---------|
 | Comic | Multi-source / CBZ, vertical & horizontal, RTL, zoom, double-page, fit, thumbs, bookmarks, trial, watermark, ink, sync hook |
 | Novel | EPUB + txt/md/html, search, nested TOC, themes, TTS, media overlay, bookmarks/highlights, watermark, ink |
-| PDF | `pdf` 3.13.0 + `printing` raster; comic-aligned toolbar / bookmarks / trial / ink / sync |
+| PDF | `pdf` 3.13.1 + `printing` raster; comic-aligned toolbar / bookmarks / trial / ink / sync |
 | Shared | Settings / progress / bookmark stores, brightness, wakelock, tap zones, progress bar, JSON export, `onSync` |
 
 ---
@@ -231,7 +231,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF (`PdfReader`)
 
-Uses **`pdf` 3.13.0** + **`printing` 5.15.0**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium). Page-based features align with `ComicReader` (no novel-only TTS / chapter TOC / text search).
+Uses **`pdf` 3.13.1** + **`printing` 5.15.1**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium). Page-based features align with `ComicReader` (no novel-only TTS / chapter TOC / text search).
 
 ### Implemented
 
@@ -313,12 +313,13 @@ Legacy helpers: `trialPageCount` · `clampTrialPage` · `trialLimited` · `atTri
 | Platform | Comic | Novel (text) | Novel (EPUB) | PDF |
 |----------|-------|--------------|--------------|-----|
 | Android / iOS | ✓ | ✓ | ✓ | ✓ |
-| Linux / Windows / macOS | ✓ | ✓ | ✓ (`webview_flutter`) | ✓ (`printing` / pdfium) |
-| Web | ✓ (URL images) | ✓ (asset / url / bytes) | WebView + assets required | pdf.js required |
+| macOS | ✓ | ✓ | ✓ (`webview_flutter`) | ✓ (`printing` / pdfium) |
+| Linux / Windows | ✓ | ✓ | Unsupported with a visible fallback message | ✓ (`printing` / pdfium) |
+| Web | ✓ (URL images) | ✓ (asset / url / bytes) | Unsupported with a visible fallback message | pdf.js (network required by default) |
 
 Notes:
 
-- **Linux / Windows**: local `file` paths work; EPUB uses WebView; PDF does not rely on system WebView PDF embed.
+- **Linux / Windows**: local `file` paths work; EPUB is not supported by the bundled WebView backend; PDF does not rely on system WebView PDF embed.
 - Desktop **TTS / system brightness** may be limited (brightness falls back to overlay).
 - **macOS sandbox**: `ComicPages.fromUrls` requires `com.apple.security.network.client` in host entitlements for outbound HTTP/HTTPS; the example app includes this.
 - On web, `NovelSource.*(path)` / `ComicPages.fromFiles` throw `UnsupportedError` — use asset / url / bytes.
@@ -411,3 +412,11 @@ See [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_zh.md](CHANGELOG_zh.md).
 </p>
 
 <p align="center">If you find this project helpful, please consider supporting me.</p>
+
+## State and compatibility
+
+Provide a stable `bookId` when available. Default IDs now derive from source/content SHA-256. Comic/PDF initial pages, progress and bookmarks use zero-based absolute content pages, independent of spreads. Legacy comic positions with an explicit bookId migrate using the current layout. Old default hashCode IDs cannot be reliably mapped back to books; original keys are retained and can be copied with `ReaderProgressStore.instance.migrate(oldId, newId)` and `ReaderBookmarkStore.instance.migrate(oldId, newId)`.
+
+`NovelTypography.copyWith(fontFamily: null)` restores the system font; omitting the argument preserves the existing font. Legacy tap-zone/trial helpers remain deprecated compatibility APIs. A nonpositive trial maxCount continues to mean unlimited.
+
+PDF counts pages with tiny 8 DPI rasters and renders full pages on demand, using a 32 MiB raster cache and 24 DPI thumbnails. Page counting still takes time for large documents. `ComicArchive.fromBytesAsync` decodes on a worker isolate; archive limits are 64 MiB compressed, 256 MiB uncompressed images and 5000 pages. Ink is saved per book/location with normalized coordinates, undo and clear. EPUB book scripts and external navigation are disabled; preview restrictions apply to navigation, search and rendered chapter content.

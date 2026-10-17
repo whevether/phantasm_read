@@ -1,3 +1,11 @@
+## 0.0.8
+
+* Fix trial boundaries, absolute progress, text decoding/pagination, vertical navigation, stable book IDs and asynchronous reader lifecycle.
+* Repair EPUB search and async bridge, isolate book scripts, enforce chapter preview windows and correct platform support documentation.
+* Add bounded PDF rasters, natural CBZ ordering and async decoding, serialized bookmark writes, and per-location ink persistence/export.
+* Share comic/PDF controls, retain deprecated compatibility APIs, update dependencies and add regression coverage.
+* Preserve old storage keys and provide explicit migration helpers; legacy comic positions migrate using the current layout.
+
 ## 0.0.7
 
 * Bump dependencies: `material_ui` ^1.6.0、`archive` 4.4.0、`printing` 5.15.1、`shared_preferences` 2.5.6、`wakelock_plus` 1.8.1; require Flutter >=3.47 / Dart 3.13+

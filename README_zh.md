@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.7`）。
+跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.8`）。
 
 [English](README.md)
 
@@ -12,7 +12,7 @@
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.7
+  phantasm_read: ^0.0.8
 ```
 
 许可证：[MIT](LICENSE)
@@ -53,7 +53,7 @@ PdfReader(
 |------|----------|
 | 漫画 | 多图源 / CBZ、竖横滑、RTL、缩放、双页、适应、缩略图、书签、试读、水印、手绘、同步回调 |
 | 小说 | EPUB + txt/md/html、搜索、嵌套目录、主题排版、TTS、Media Overlay、书签划线、水印、手绘 |
-| PDF | `pdf` 3.13.0 + `printing` 光栅化；与漫画对齐的工具栏 / 书签 / 试读 / 手绘 / 同步等 |
+| PDF | `pdf` 3.13.1 + `printing` 光栅化；与漫画对齐的工具栏 / 书签 / 试读 / 手绘 / 同步等 |
 | 共用 | 设置 / 进度 / 书签持久化、亮度、不息屏、点击分区、进度条、导出 JSON、`onSync` |
 
 ---
@@ -232,7 +232,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF（`PdfReader`）
 
-基于 **`pdf` 3.13.0** + **`printing` 5.15.0**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。页式能力与漫画阅读器对齐（不含小说专属的 TTS / 章目录 / 正文搜索）。
+基于 **`pdf` 3.13.1** + **`printing` 5.15.1**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。页式能力与漫画阅读器对齐（不含小说专属的 TTS / 章目录 / 正文搜索）。
 
 ### 已实现
 
@@ -314,12 +314,13 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | 平台 | 漫画 | 小说（文本） | 小说（EPUB） | PDF |
 |------|------|-------------|-------------|-----|
 | Android / iOS | ✓ | ✓ | ✓ | ✓ |
-| Linux / Windows / macOS | ✓ | ✓ | ✓（`webview_flutter`） | ✓（`printing` / pdfium） |
-| Web | ✓（URL 图源） | ✓（asset / url / bytes） | 需 WebView + 资源加载 | 需配置 pdf.js |
+| macOS | ✓ | ✓ | ✓（`webview_flutter`） | ✓（`printing` / pdfium） |
+| Linux / Windows | ✓ | ✓ | 暂不支持，显示明确提示 | ✓（`printing` / pdfium） |
+| Web | ✓（URL 图源） | ✓（asset / url / bytes） | 暂不支持，显示明确提示 | pdf.js（默认需联网） |
 
 说明：
 
-- **Linux / Windows**：本地 `file` 路径可用；EPUB 走 WebView；PDF 不依赖系统 WebView 内嵌 PDF。
+- **Linux / Windows**：本地 `file` 路径可用；内嵌 WebView 后端不支持 EPUB；PDF 不依赖系统 WebView 内嵌 PDF。
 - 桌面端 **TTS / 系统亮度** 可能降级或不可用（亮度会回退遮罩层）。
 - **macOS 沙盒**：使用 `ComicPages.fromUrls` 加载网络漫画时，宿主 App 需在 entitlements 中启用 `com.apple.security.network.client`（出站 HTTP/HTTPS）；示例工程已配置。
 - Web 上 `NovelSource.*(path)` / `ComicPages.fromFiles` 会 `UnsupportedError`，请用 asset / url / bytes。
@@ -411,3 +412,13 @@ flutter run
 </p>
 
 <p align="center">如果觉得这个项目对你有帮助，欢迎支持我。</p>
+
+## 阅读状态与兼容性
+
+建议传入稳定的 `bookId`。默认 ID 现在由来源或内容 SHA-256 生成，重建组件不会改变 ID；不同内存书籍也不会共用进度。漫画和 PDF 的 `initialPage`、书签及进度统一使用绝对内容页号（从 0 开始），与双页屏号无关。旧版漫画数据带固定 bookId 时会按当前布局迁移；旧版默认 hashCode ID 无法可靠反推出书籍，已保留旧键，可用 `ReaderProgressStore.instance.migrate(oldId, newId)` 和 `ReaderBookmarkStore.instance.migrate(oldId, newId)` 显式复制。
+
+`NovelTypography.copyWith(fontFamily: null)` 恢复系统字体，省略该参数保留原字体。旧 tap-zone/trial helper API 保留并标记弃用。`ReaderTrialLimit.maxCount <= 0` 保留“不限制”的兼容语义。
+
+PDF 使用 8 DPI 的轻量页数扫描，高分辨率页面按需光栅化，缓存上限 32 MiB，缩略图使用 24 DPI。大文档的页数扫描仍需要时间。CBZ 支持 `ComicArchive.fromBytesAsync` 在后台 isolate 解压，默认限制压缩包 64 MiB、解压图像总计 256 MiB、5000 张图片。
+
+手绘按书籍及页/文本锚点自动保存归一化坐标，开启手绘时支持撤销和清空。EPUB 默认禁止书籍脚本和外部导航；试读约束同时作用于章节导航、搜索和渲染内容。

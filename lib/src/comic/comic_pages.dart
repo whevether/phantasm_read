@@ -4,6 +4,7 @@ import 'package:extended_image/extended_image.dart';
 import 'package:flutter/painting.dart';
 
 import 'comic_file_image.dart';
+import '../common/reader_identity.dart';
 
 /// Page list for the comic reader.
 sealed class ComicPages {
@@ -12,6 +13,15 @@ sealed class ComicPages {
   factory ComicPages.fromFiles(List<String> paths) = ComicPagesFiles;
   factory ComicPages.fromUrls(List<String> urls) = ComicPagesUrls;
   factory ComicPages.fromBytes(List<Uint8List> bytes) = ComicPagesBytes;
+
+  String get stableId => switch (this) {
+    ComicPagesFiles(:final paths) => readerIdentity('comic_files', paths),
+    ComicPagesUrls(:final urls) => readerIdentity('comic_urls', urls),
+    ComicPagesBytes(:final bytes) => readerIdentity(
+      'comic_bytes',
+      bytes.map((b) => readerBytesIdentity('page', b)),
+    ),
+  };
 
   int get length;
 

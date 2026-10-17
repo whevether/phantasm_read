@@ -17,6 +17,7 @@ class ReaderImmersive {
 /// Left / center / right tap zones for paging and toolbar.
 enum TapZoneAction { previous, toggleToolbar, next }
 
+@Deprecated('Readers now use toolbar-only tap gestures.')
 class TapZoneDetector {
   const TapZoneDetector({this.enabled = true, this.rtl = false});
 

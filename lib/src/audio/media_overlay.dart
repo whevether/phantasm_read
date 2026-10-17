@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 
@@ -30,15 +32,26 @@ class MediaOverlayCue {
 
 /// Plays narration audio and reports the active cue for highlighting.
 class MediaOverlayPlayer {
-  MediaOverlayPlayer({
-    this.onCueChanged,
-    this.onCompleted,
-  });
+  MediaOverlayPlayer({this.onCueChanged, this.onCompleted, AudioPlayer? player})
+    : _player = player ?? AudioPlayer() {
+    _positionSubscription = _player.onPositionChanged.listen(_onPosition);
+    _completeSubscription = _player.onPlayerComplete.listen((_) {
+      _resetCue();
+      onCompleted?.call();
+    });
+  }
+
+  late final StreamSubscription<Duration> _positionSubscription;
+  late final StreamSubscription<void> _completeSubscription;
+  void _resetCue() {
+    _active = null;
+    onCueChanged?.call(null);
+  }
 
   final ValueChanged<MediaOverlayCue?>? onCueChanged;
   final VoidCallback? onCompleted;
 
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player;
   List<MediaOverlayCue> _cues = const [];
   MediaOverlayCue? _active;
 
@@ -48,14 +61,14 @@ class MediaOverlayPlayer {
     required Source source,
     List<MediaOverlayCue> cues = const [],
   }) async {
+    if (cues.any((c) => c.startMs < 0 || c.endMs <= c.startMs)) {
+      throw ArgumentError(
+        'Cue end must be after start, with a nonnegative start',
+      );
+    }
+    _resetCue();
     _cues = List.of(cues)..sort((a, b) => a.startMs.compareTo(b.startMs));
     await _player.setSource(source);
-    _player.onPositionChanged.listen(_onPosition);
-    _player.onPlayerComplete.listen((_) {
-      _active = null;
-      onCueChanged?.call(null);
-      onCompleted?.call();
-    });
   }
 
   void _onPosition(Duration pos) {
@@ -75,10 +88,16 @@ class MediaOverlayPlayer {
 
   Future<void> play() => _player.resume();
   Future<void> pause() => _player.pause();
-  Future<void> stop() => _player.stop();
+  Future<void> stop() async {
+    await _player.stop();
+    _resetCue();
+  }
+
   Future<void> seek(Duration d) => _player.seek(d);
 
   Future<void> dispose() async {
+    await _positionSubscription.cancel();
+    await _completeSubscription.cancel();
     await _player.dispose();
   }
 }

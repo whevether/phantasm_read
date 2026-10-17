@@ -46,6 +46,14 @@ class NovelTextDecoder {
               RegExp(r'<style[\s\S]*?</style>', caseSensitive: false),
               '',
             )
+            .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+            .replaceAll(
+              RegExp(
+                r'</(?:p|div|h[1-6]|li|section|article|blockquote|tr)\s*>',
+                caseSensitive: false,
+              ),
+              '\n\n',
+            )
             .replaceAll(RegExp(r'<[^>]+>'), '')
             .replaceAll('&nbsp;', ' ')
             .replaceAll('&lt;', '<')
@@ -55,9 +63,9 @@ class NovelTextDecoder {
       case 'markdown':
         return raw
             .replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '')
-            .replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1')
-            .replaceAll(RegExp(r'\*(.+?)\*'), r'$1')
-            .replaceAll(RegExp(r'`(.+?)`'), r'$1')
+            .replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'), (m) => m[1]!)
+            .replaceAllMapped(RegExp(r'\*(.+?)\*'), (m) => m[1]!)
+            .replaceAllMapped(RegExp(r'`(.+?)`'), (m) => m[1]!)
             .trim();
       default:
         return raw;

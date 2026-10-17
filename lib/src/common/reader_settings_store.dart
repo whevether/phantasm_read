@@ -30,38 +30,38 @@ class ReaderSettingsStore {
   }
 
   Map<String, dynamic> _toJson(ReaderSettings s) => {
-        'brightness': s.brightness,
-        'keepScreenOn': s.keepScreenOn,
-        'fontSize': s.typography.fontSize,
-        'lineHeight': s.typography.lineHeight,
-        'fontFamily': s.typography.fontFamily,
-        'letterSpacing': s.typography.letterSpacing,
-        'textAlign': s.typography.textAlign.name,
-        'pageMargin': s.typography.pageMargin,
-        'backgroundColor': s.backgroundColor,
-        'foregroundColor': s.foregroundColor,
-        'novelReadingMode': s.novelReadingMode.name,
-        'comicFitMode': s.comicFitMode.name,
-        'doublePage': s.doublePage,
-        'comicBackground': s.comicBackground,
-        'tapZonesEnabled': s.tapZonesEnabled,
-        'immersive': s.immersive,
-      };
+    'brightness': s.brightness,
+    'keepScreenOn': s.keepScreenOn,
+    'fontSize': s.typography.fontSize,
+    'lineHeight': s.typography.lineHeight,
+    'fontFamily': s.typography.fontFamily,
+    'letterSpacing': s.typography.letterSpacing,
+    'textAlign': s.typography.textAlign.name,
+    'pageMargin': s.typography.pageMargin,
+    'backgroundColor': s.backgroundColor,
+    'foregroundColor': s.foregroundColor,
+    'novelReadingMode': s.novelReadingMode.name,
+    'comicFitMode': s.comicFitMode.name,
+    'doublePage': s.doublePage,
+    'comicBackground': s.comicBackground,
+    'tapZonesEnabled': s.tapZonesEnabled,
+    'immersive': s.immersive,
+  };
 
   ReaderSettings _fromJson(Map<String, dynamic> json) {
     return ReaderSettings(
-      brightness: (json['brightness'] as num?)?.toDouble() ?? 0.8,
+      brightness: _number(json['brightness'], 0.8, 0, 1),
       keepScreenOn: json['keepScreenOn'] as bool? ?? true,
       typography: NovelTypography(
-        fontSize: (json['fontSize'] as num?)?.toDouble() ?? 18,
-        lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.6,
+        fontSize: _number(json['fontSize'], 18, 1, 200),
+        lineHeight: _number(json['lineHeight'], 1.6, 0.1, 10),
         fontFamily: json['fontFamily'] as String?,
-        letterSpacing: (json['letterSpacing'] as num?)?.toDouble() ?? 0,
+        letterSpacing: _number(json['letterSpacing'], 0, -10, 100),
         textAlign: TextAlignOption.values.firstWhere(
           (e) => e.name == json['textAlign'],
           orElse: () => TextAlignOption.left,
         ),
-        pageMargin: (json['pageMargin'] as num?)?.toDouble() ?? 20,
+        pageMargin: _number(json['pageMargin'], 20, 0, 1000),
       ),
       backgroundColor: json['backgroundColor'] as int?,
       foregroundColor: json['foregroundColor'] as int?,
@@ -79,4 +79,9 @@ class ReaderSettingsStore {
       immersive: json['immersive'] as bool? ?? true,
     );
   }
+}
+
+double _number(Object? input, double fallback, double min, double max) {
+  if (input is! num || !input.isFinite) return fallback;
+  return input.toDouble().clamp(min, max);
 }

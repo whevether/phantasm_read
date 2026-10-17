@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -17,7 +16,10 @@ import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
 import '../common/reader_trial_limit.dart';
-import '../common/reader_wake_lock.dart';
+import '../common/reader_identity.dart';
+import '../common/reader_page_window.dart';
+import '../common/page_reader_toolbar.dart';
+import 'pdf_raster_cache.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
 import '../common/trial_gesture_boundary.dart';
@@ -26,6 +28,11 @@ import '../novel/file_bytes.dart';
 /// PDF document source.
 sealed class PdfSource {
   const PdfSource();
+  String get stableId => switch (this) {
+    PdfSourceFile(:final path) => readerIdentity('pdf_file', [path]),
+    PdfSourceUrl(:final url) => readerIdentity('pdf_url', [url]),
+    PdfSourceBytes(:final bytes) => readerBytesIdentity('pdf_bytes', bytes),
+  };
   factory PdfSource.file(String path) = PdfSourceFile;
   factory PdfSource.bytes(Uint8List bytes, {String name = 'doc.pdf'}) {
     return PdfSourceBytes(bytes, name: name);
@@ -50,7 +57,7 @@ final class PdfSourceUrl extends PdfSource {
   final String? name;
 }
 
-/// PDF reader using `pdf` 3.13.0 + `printing` raster (pdfium on desktop/mobile).
+/// PDF reader using bounded on-demand `printing` rasters.
 ///
 /// Feature set aligns with [ComicReader] for page-based reading: toolbar,
 /// bookmarks, thumbs, trial, ink, sync, immersive, RTL, vertical/horizontal,
@@ -107,70 +114,39 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   late ComicReadingMode _mode;
   PageController? _pageController;
 
-  Uint8List? _bytes;
-  final List<PdfRaster> _pages = [];
+  int _totalPages = 0;
+  PdfRasterCache? _rasterCache;
+  late final _session = ReaderSession(_brightness);
+  int _loadVersion = 0;
+  String? _identity;
   int _currentPage = 0;
   bool _toolbarVisible = false;
   bool _loading = true;
-  bool _rasterizing = false;
   String? _error;
   List<ReaderBookmark> _bookmarks = const [];
   DateTime? _sessionStarted;
   Timer? _sessionTimer;
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
 
-  String get _bookId => widget.bookId ?? 'pdf_${widget.source.hashCode}';
+  String get _bookId => widget.bookId ?? (_identity ??= widget.source.stableId);
 
   bool get _doublePageActive =>
       _settings.doublePage &&
       _mode == ComicReadingMode.horizontal &&
-      _pages.length > 1;
+      _totalPages > 1;
 
-  int _readableRawCount() {
-    final total = _pages.length;
-    if (total == 0) return 0;
-    final limit = widget.trialLimit;
-    if (limit == null || !limit.isActive) return total;
-    return limit.visibleCount(total);
-  }
-
-  int get _itemCount {
-    final visibleRaw = _readableRawCount();
-    if (visibleRaw <= 0) return 0;
-    if (_doublePageActive) {
-      return ((visibleRaw + 1) ~/ 2).clamp(1, visibleRaw);
-    }
-    return visibleRaw;
-  }
-
-  bool get _hasMoreBeyondTrial {
-    final limit = widget.trialLimit;
-    return limit != null &&
-        limit.isActive &&
-        _pages.isNotEmpty &&
-        limit.hasMoreBeyond(_pages.length);
-  }
-
-  int get _pageViewCount =>
-      trialPageViewCount(_itemCount, _hasMoreBeyondTrial);
-
-  int _contentPageIndex(int logicalIndex) {
-    final start = widget.trialLimit?.startIndex ?? 0;
-    if (_doublePageActive) {
-      return (start + logicalIndex * 2).clamp(0, _pages.length - 1);
-    }
-    return (start + logicalIndex).clamp(0, (_pages.length - 1).clamp(0, 1 << 30));
-  }
-
-  int _logicalIndexForContent(int contentIndex) {
-    final start = widget.trialLimit?.startIndex ?? 0;
-    final count = _itemCount;
-    if (count <= 0) return 0;
-    if (_doublePageActive) {
-      return ((contentIndex - start) ~/ 2).clamp(0, count - 1);
-    }
-    return (contentIndex - start).clamp(0, count - 1);
-  }
+  ReaderPageWindow get _window => ReaderPageWindow(
+    _totalPages,
+    trial: widget.trialLimit,
+    doublePage: _doublePageActive,
+  );
+  int get _itemCount => _window.count;
+  bool get _hasMoreBeyondTrial =>
+      widget.trialLimit?.hasMoreBeyond(_totalPages) ?? false;
+  int get _pageViewCount => trialPageViewCount(_itemCount, _hasMoreBeyondTrial);
+  int _contentPageIndex(int logicalIndex) => _window.content(logicalIndex);
+  int _logicalIndexForContent(int contentIndex) =>
+      _window.logical(contentIndex);
 
   BoxFit get _fit {
     switch (_settings.comicFitMode) {
@@ -191,7 +167,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
         limit: limit,
         currentIndex: _contentPageIndex(_currentPage),
         targetIndex: targetIndex,
-        totalCount: _pages.length,
+        totalCount: _totalPages,
         action: action,
       ),
     );
@@ -206,7 +182,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       limit: limit,
       currentIndex: _contentPageIndex(lastLogical),
       targetIndex: _contentPageIndex(lastLogical) + 1,
-      totalCount: _pages.length,
+      totalCount: _totalPages,
       action: ReaderTrialLimitAction.next,
     );
     _currentPage = lastLogical;
@@ -233,61 +209,74 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     _bootstrap();
   }
 
-  Future<void> _bootstrap() async {
+  Future<void> _bootstrap({int? restorePage}) async {
+    final version = ++_loadVersion;
+    final source = widget.source;
+    final bookId = _bookId;
+    var content = restorePage ?? widget.initialPage;
     try {
+      var settings = widget.settings;
       if (widget.persistSettings) {
-        final saved = await ReaderSettingsStore.instance.load();
-        if (saved != null) _settings = saved;
+        settings = await ReaderSettingsStore.instance.load() ?? settings;
       }
-      if (widget.persistProgress) {
-        final p = await ReaderProgressStore.instance.load(_bookId);
-        if (p != null) {
-          _currentPage = _logicalIndexForContent(p.pageIndex);
-        }
+      if (!mounted || version != _loadVersion) return;
+      if (widget.persistProgress && restorePage == null) {
+        content =
+            (await ReaderProgressStore.instance.load(bookId))?.pageIndex ??
+            content;
       }
-      _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-
+      final bookmarks = await ReaderBookmarkStore.instance.listBookmarks(
+        bookId,
+      );
       final info = await Printing.info();
       if (!info.canRaster) {
-        throw UnsupportedError(
-          'PDF raster is not available on this platform. '
-          'On web, configure pdf.js for the printing package.',
-        );
+        throw UnsupportedError('PDF raster is unavailable on this platform.');
       }
-
-      _bytes = await _loadBytes();
-      await _rasterDocument();
-    } catch (e) {
-      _error = e.toString();
-    }
-
-    if (mounted && _error == null && _pages.isEmpty) {
-      _error =
-          'PDF has no readable pages. On Android, use PDF 1.7+ without encryption.';
-    }
-
-    _currentPage = _currentPage.clamp(0, (_itemCount - 1).clamp(0, 1 << 30));
-    _pageController = PageController(initialPage: _currentPage);
-    if (_settings.immersive) await ReaderImmersive.enter();
-    await _enterReading();
-    _sessionStarted = DateTime.now();
-    _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      final started = _sessionStarted;
-      if (started != null) {
-        widget.onSessionTick?.call(DateTime.now().difference(started));
+      final bytes = await _loadBytes(source);
+      if (!mounted || version != _loadVersion) return;
+      // Count with tiny rasters, discarding pixels immediately. Full-resolution
+      // pages are rendered only when visible, rather than expanding the book.
+      var count = 0;
+      await for (final _ in Printing.raster(bytes, dpi: 8)) {
+        if (!mounted || version != _loadVersion) return;
+        if (++count > 100000) throw const FormatException('Too many PDF pages');
       }
-    });
-
-    if (mounted) {
+      if (!mounted || version != _loadVersion) return;
+      if (count == 0) throw const FormatException('PDF has no readable pages');
+      _settings = settings;
+      _bookmarks = bookmarks;
+      _totalPages = count;
+      _rasterCache?.dispose();
+      _rasterCache = PdfRasterCache(bytes);
+      _currentPage = _logicalIndexForContent(content);
+      _rebindPageController();
+      await _session.apply(_settings);
+      if (!mounted || version != _loadVersion) return;
+      _sessionTimer?.cancel();
+      _sessionStarted = DateTime.now();
+      _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted) {
+          widget.onSessionTick?.call(
+            DateTime.now().difference(_sessionStarted!),
+          );
+        }
+      });
       setState(() => _loading = false);
-      if (_pages.isNotEmpty) {
+      if (_itemCount > 0) {
         widget.onPageChanged?.call(_contentPageIndex(_currentPage));
+      }
+    } catch (e) {
+      if (mounted && version == _loadVersion) {
+        setState(() {
+          _error = '$e';
+          _loading = false;
+        });
       }
     }
   }
 
-  Future<Uint8List> _loadBytes() async {
-    switch (widget.source) {
+  Future<Uint8List> _loadBytes(PdfSource source) async {
+    switch (source) {
       case PdfSourceFile(:final path):
         return readFileBytes(path);
       case PdfSourceBytes(:final bytes):
@@ -304,40 +293,13 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _rasterDocument() async {
-    final bytes = _bytes;
-    if (bytes == null || _rasterizing) return;
-    _rasterizing = true;
-    try {
-      await for (final page in Printing.raster(bytes, dpi: widget.rasterDpi)) {
-        if (!mounted) return;
-        setState(() => _pages.add(page));
-      }
-    } catch (e) {
-      if (mounted) _error = e.toString();
-    } finally {
-      _rasterizing = false;
-    }
-  }
-
-  Future<void> _enterReading() async {
-    await _brightness.apply(_settings.brightness);
-    if (_settings.keepScreenOn) await ReaderWakeLock.enable();
-  }
-
-  Future<void> _leaveReading() async {
-    await _brightness.restore();
-    await ReaderWakeLock.disable();
-    await ReaderImmersive.leave();
-  }
-
   Future<void> _saveProgress() async {
-    if (!widget.persistProgress || _pages.isEmpty) return;
+    if (!widget.persistProgress || (_totalPages == 0)) return;
     final content = _contentPageIndex(_currentPage);
     final progress = ReaderProgress(
       bookId: _bookId,
       pageIndex: content,
-      percentage: (content + 1) / _pages.length,
+      percentage: (content + 1) / _totalPages,
     );
     await ReaderProgressStore.instance.save(progress);
     await ReaderSyncHub(onSync: widget.onSync).emit(
@@ -352,7 +314,6 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   void _emitSettings(ReaderSettings next) {
     final wasDouble = _doublePageActive;
     final enablingDouble = next.doublePage && !_settings.doublePage;
-    final brightnessChanged = next.brightness != _settings.brightness;
     final content = _contentPageIndex(_currentPage);
     var nextMode = _mode;
     if (enablingDouble && _mode == ComicReadingMode.vertical) {
@@ -363,19 +324,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _mode = nextMode;
       _currentPage = _logicalIndexForContent(content);
     });
-    if (brightnessChanged) {
-      _brightness.apply(next.brightness);
-    }
-    if (next.keepScreenOn) {
-      ReaderWakeLock.enable();
-    } else {
-      ReaderWakeLock.disable();
-    }
-    if (next.immersive) {
-      ReaderImmersive.enter();
-    } else {
-      ReaderImmersive.leave();
-    }
+    _session.apply(next);
     if (widget.persistSettings) {
       ReaderSettingsStore.instance.save(next);
     }
@@ -395,9 +344,9 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   }
 
   void _goToPage(int logicalPage) {
-    if (_pages.isEmpty || _itemCount <= 0) return;
+    if ((_totalPages == 0) || _itemCount <= 0) return;
     final limit = widget.trialLimit;
-    final total = _pages.length;
+    final total = _totalPages;
     var target = logicalPage;
     if (limit != null && limit.isActive) {
       final contentTarget = _contentPageIndex(
@@ -434,12 +383,14 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     final content = _contentPageIndex(_currentPage);
     final existing = _bookmarks.where((b) => b.pageIndex == content);
     if (existing.isNotEmpty) {
-      await ReaderBookmarkStore.instance
-          .removeBookmark(_bookId, existing.first.id);
+      await ReaderBookmarkStore.instance.removeBookmark(
+        _bookId,
+        existing.first.id,
+      );
     } else {
       await ReaderBookmarkStore.instance.addBookmark(
         ReaderBookmark(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          id: readerRecordId(),
           bookId: _bookId,
           title: 'Page ${content + 1}',
           pageIndex: content,
@@ -464,14 +415,16 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                 onTap: () {
                   Navigator.pop(context);
                   if (b.pageIndex != null) {
-                    _goToPage(_logicalIndexForContent(b.pageIndex!));
+                    _goToContent(b.pageIndex!);
                   }
                 },
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
-                    await ReaderBookmarkStore.instance
-                        .removeBookmark(_bookId, b.id);
+                    await ReaderBookmarkStore.instance.removeBookmark(
+                      _bookId,
+                      b.id,
+                    );
                     _bookmarks = await ReaderBookmarkStore.instance
                         .listBookmarks(_bookId);
                     if (context.mounted) Navigator.pop(context);
@@ -499,14 +452,15 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
               mainAxisSpacing: 8,
               crossAxisSpacing: 8,
             ),
-            itemCount: _pages.length,
-            itemBuilder: (context, index) {
+            itemCount: _window.visible,
+            itemBuilder: (context, i) {
+              final index = _window.start + i;
               return GestureDetector(
                 onTap: () {
                   Navigator.pop(context);
-                  _goToPage(_logicalIndexForContent(index));
+                  _goToContent(index);
                 },
-                child: _PdfRasterThumb(raster: _pages[index]),
+                child: _rasterWidget(index, thumbnail: true),
               );
             },
           ),
@@ -534,70 +488,70 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     return KeyEventResult.ignored;
   }
 
+  void _goToContent(int raw) {
+    if (!_window.readable(raw)) {
+      _notifyTrialLimit(ReaderTrialLimitAction.seek, raw);
+      return;
+    }
+    _goToPage(_logicalIndexForContent(raw));
+  }
+
+  Widget _rasterWidget(int index, {bool thumbnail = false}) => _PdfRasterImage(
+    key: ValueKey((_rasterCache, index, thumbnail)),
+    load: () => _rasterCache!.page(index, thumbnail ? 24 : widget.rasterDpi),
+    thumbnail: thumbnail,
+    fit: _fit,
+  );
+
   Widget _buildPage(int logicalIndex) {
     final raw = _contentPageIndex(logicalIndex);
-    if (_doublePageActive && raw + 1 < _pages.length) {
-      final limit = widget.trialLimit;
-      final secondOk = limit == null ||
-          !limit.isActive ||
-          limit.isReadable(raw + 1, _pages.length);
+    if (_doublePageActive) {
       return Row(
         children: [
-          Expanded(child: _PdfRasterPage(raster: _pages[raw], fit: _fit)),
-          if (secondOk)
-            Expanded(child: _PdfRasterPage(raster: _pages[raw + 1], fit: _fit))
-          else
-            const Expanded(child: SizedBox.expand()),
+          Expanded(child: _rasterWidget(raw)),
+          Expanded(
+            child: _window.readable(raw + 1)
+                ? _rasterWidget(raw + 1)
+                : const SizedBox.expand(),
+          ),
         ],
       );
     }
-    if (raw >= _pages.length) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return _PdfRasterPage(raster: _pages[raw], fit: _fit);
+    return _rasterWidget(raw);
   }
 
   @override
   void didUpdateWidget(covariant PdfReader oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.settings != widget.settings) {
-      final wasDouble = _doublePageActive;
-      final content = _contentPageIndex(_currentPage);
-      final immersiveChanged =
-          oldWidget.settings.immersive != widget.settings.immersive;
-      setState(() {
-        _settings = widget.settings;
-        if (_settings.doublePage && _mode == ComicReadingMode.vertical) {
-          _mode = ComicReadingMode.horizontal;
-        }
-        _currentPage = _logicalIndexForContent(content);
-      });
-      _brightness.apply(_settings.brightness);
-      if (_settings.keepScreenOn) {
-        ReaderWakeLock.enable();
-      } else {
-        ReaderWakeLock.disable();
-      }
-      if (immersiveChanged || _settings.immersive) {
-        if (_settings.immersive) {
-          ReaderImmersive.enter();
-        } else {
-          ReaderImmersive.leave();
-        }
-      }
-      if (wasDouble != _doublePageActive) {
-        _rebindPageController();
-      }
+    if (oldWidget.source.stableId != widget.source.stableId ||
+        oldWidget.bookId != widget.bookId ||
+        oldWidget.rasterDpi != widget.rasterDpi) {
+      final restore =
+          oldWidget.source.stableId == widget.source.stableId &&
+              oldWidget.bookId == widget.bookId
+          ? _contentPageIndex(_currentPage)
+          : null;
+      _identity = null;
+      _loading = true;
+      _error = null;
+      _sessionTimer?.cancel();
+      _rasterCache?.dispose();
+      _rasterCache = null;
+      _totalPages = 0;
+      _mode = widget.readingMode;
+      _bootstrap(restorePage: restore);
+      return;
     }
-    if (oldWidget.readingMode != widget.readingMode) {
-      final content = _contentPageIndex(_currentPage);
-      setState(() {
-        _mode = widget.readingMode;
-        if (_settings.doublePage && _mode == ComicReadingMode.vertical) {
-          _mode = ComicReadingMode.horizontal;
-        }
-        _currentPage = _logicalIndexForContent(content);
-      });
+    final content = _contentPageIndex(_currentPage);
+    if (oldWidget.settings != widget.settings) {
+      _settings = widget.settings;
+      _session.apply(_settings);
+    }
+    if (oldWidget.readingMode != widget.readingMode) _mode = widget.readingMode;
+    _currentPage = _logicalIndexForContent(content);
+    if (oldWidget.settings != widget.settings ||
+        oldWidget.readingMode != widget.readingMode ||
+        oldWidget.trialLimit != widget.trialLimit) {
       _rebindPageController();
     }
   }
@@ -605,10 +559,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      ReaderWakeLock.disable();
       _saveProgress();
-    } else if (state == AppLifecycleState.resumed && _settings.keepScreenOn) {
-      ReaderWakeLock.enable();
     }
   }
 
@@ -617,9 +568,11 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _sessionTimer?.cancel();
     _saveProgress();
-    _leaveReading();
+    _loadVersion++;
+    _session.dispose();
+    _rasterCache?.dispose();
     _pageController?.dispose();
-    _brightness.dispose();
+
     super.dispose();
   }
 
@@ -632,9 +585,12 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (_itemCount == 0) {
+      return const Center(child: Text('No readable content'));
+    }
     final controller = _pageController!;
     final progress = _itemCount == 0 ? 0.0 : (_currentPage + 1) / _itemCount;
-    final content = _pages.isEmpty ? 0 : _contentPageIndex(_currentPage);
+    final content = (_totalPages == 0) ? 0 : _contentPageIndex(_currentPage);
     final bookmarked = _bookmarks.any((b) => b.pageIndex == content);
 
     return Focus(
@@ -647,7 +603,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
             fit: StackFit.expand,
             children: [
               ColoredBox(color: Color(_settings.comicBackground)),
-              if (_pages.isNotEmpty)
+              if ((_totalPages > 0))
                 GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onTapUp: (_) {
@@ -665,8 +621,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                     scrollDirection: _mode == ComicReadingMode.vertical
                         ? Axis.vertical
                         : Axis.horizontal,
-                    reverse:
-                        widget.rtl && _mode == ComicReadingMode.horizontal,
+                    reverse: widget.rtl && _mode == ComicReadingMode.horizontal,
                     onPageChanged: (i) {
                       if (isTrialNextSentinel(
                         index: i,
@@ -700,18 +655,22 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
               ),
               if (widget.watermarkText != null)
                 ReaderWatermark(text: widget.watermarkText!),
-              InkAnnotationLayer(enabled: widget.enableInk),
-              if (!_toolbarVisible && _pages.isNotEmpty)
+              ReaderInk(
+                key: ValueKey('$_bookId:$content'),
+                bookId: _bookId,
+                location: '$content',
+                enabled: widget.enableInk,
+              ),
+              if (!_toolbarVisible && (_totalPages > 0))
                 ReaderProgressBar(
                   progress: progress,
-                  onSeek: (v) =>
-                      _goToPage((v * (_itemCount - 1)).round()),
+                  onSeek: (v) => _goToPage((v * (_itemCount - 1)).round()),
                 ),
               if (widget.showToolbar && _toolbarVisible)
-                _PdfToolbar(
-                  pageLabel: _pages.isEmpty
+                PageReaderToolbar(
+                  pageLabel: (_totalPages == 0)
                       ? 'PDF · loading…'
-                      : 'PDF · ${content + 1} / ${_pages.length}',
+                      : 'PDF · ${content + 1} / $_totalPages',
                   progress: progress,
                   settings: _settings,
                   mode: _mode,
@@ -732,11 +691,8 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                   onToggleBookmark: _toggleBookmark,
                   onShowBookmarks: _showBookmarks,
                   onShowThumbs: _showThumbnails,
-                  onSeek: (v) =>
-                      _goToPage((v * (_itemCount - 1)).round()),
-                  onPageInput: (contentZeroBased) {
-                    _goToPage(_logicalIndexForContent(contentZeroBased));
-                  },
+                  onSeek: (v) => _goToPage((v * (_itemCount - 1)).round()),
+                  onPageInput: _goToContent,
                 ),
             ],
           );
@@ -746,361 +702,46 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   }
 }
 
-class _PdfToolbar extends StatelessWidget {
-  const _PdfToolbar({
-    required this.pageLabel,
-    required this.progress,
-    required this.settings,
-    required this.mode,
-    required this.bookmarked,
-    required this.onModeChanged,
-    required this.onSettingsChanged,
-    required this.onToggleBookmark,
-    required this.onShowBookmarks,
-    required this.onShowThumbs,
-    required this.onSeek,
-    required this.onPageInput,
+class _PdfRasterImage extends StatefulWidget {
+  const _PdfRasterImage({
+    super.key,
+    required this.load,
+    required this.fit,
+    this.thumbnail = false,
   });
-
-  final String pageLabel;
-  final double progress;
-  final ReaderSettings settings;
-  final ComicReadingMode mode;
-  final bool bookmarked;
-  final ValueChanged<ComicReadingMode> onModeChanged;
-  final ValueChanged<ReaderSettings> onSettingsChanged;
-  final VoidCallback onToggleBookmark;
-  final VoidCallback onShowBookmarks;
-  final VoidCallback onShowThumbs;
-  final ValueChanged<double> onSeek;
-  final ValueChanged<int> onPageInput;
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: Material(
-        color: Colors.black54,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(pageLabel, style: const TextStyle(color: Colors.white)),
-                Slider(value: progress.clamp(0, 1), onChanged: onSeek),
-                Row(
-                  children: [
-                    const Icon(Icons.brightness_6, color: Colors.white, size: 18),
-                    Expanded(
-                      child: Slider(
-                        value: settings.brightness,
-                        onChanged: (v) =>
-                            onSettingsChanged(settings.copyWith(brightness: v)),
-                      ),
-                    ),
-                  ],
-                ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        tooltip: '方向',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onModeChanged(
-                          mode == ComicReadingMode.vertical
-                              ? ComicReadingMode.horizontal
-                              : ComicReadingMode.vertical,
-                        ),
-                        icon: Icon(
-                          mode == ComicReadingMode.vertical
-                              ? Icons.swap_vert
-                              : Icons.swap_horiz,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '适应',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () {
-                          final next = switch (settings.comicFitMode) {
-                            ComicFitMode.contain => ComicFitMode.width,
-                            ComicFitMode.width => ComicFitMode.height,
-                            ComicFitMode.height => ComicFitMode.contain,
-                          };
-                          onSettingsChanged(
-                            settings.copyWith(comicFitMode: next),
-                          );
-                        },
-                        icon: const Icon(Icons.fit_screen, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: settings.doublePage
-                            ? '关闭双页'
-                            : mode == ComicReadingMode.vertical
-                                ? '双页（将切换为横向）'
-                                : '双页',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(doublePage: !settings.doublePage),
-                        ),
-                        icon: Icon(
-                          settings.doublePage
-                              ? Icons.menu_book
-                              : Icons.menu_book_outlined,
-                          color: settings.doublePage
-                              ? (mode == ComicReadingMode.horizontal
-                                  ? Colors.amber
-                                  : Colors.amber.withValues(alpha: 0.45))
-                              : Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '书签',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onToggleBookmark,
-                        icon: Icon(
-                          bookmarked ? Icons.bookmark : Icons.bookmark_border,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '书签列表',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onShowBookmarks,
-                        icon: const Icon(Icons.bookmarks, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: '缩略图',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onShowThumbs,
-                        icon: const Icon(Icons.grid_view, color: Colors.white),
-                      ),
-                      IconButton(
-                        tooltip: '不熄屏',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(
-                            keepScreenOn: !settings.keepScreenOn,
-                          ),
-                        ),
-                        icon: Icon(
-                          settings.keepScreenOn
-                              ? Icons.phonelink_lock
-                              : Icons.phonelink_erase,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: settings.immersive ? '退出全屏' : '全屏',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(immersive: !settings.immersive),
-                        ),
-                        icon: Icon(
-                          settings.immersive
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Row(
-                  children: [
-                    for (final c in [0xFF000000, 0xFF333333, 0xFFFFFFFF])
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: InkWell(
-                          onTap: () => onSettingsChanged(
-                            settings.copyWith(comicBackground: c),
-                          ),
-                          child: CircleAvatar(
-                            radius: 10,
-                            backgroundColor: Color(c),
-                          ),
-                        ),
-                      ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () async {
-                        final controller = TextEditingController(
-                          text: pageLabel
-                              .replaceFirst('PDF · ', '')
-                              .split(' / ')
-                              .first,
-                        );
-                        final go = await showDialog<int>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('跳转页码'),
-                            content: TextField(
-                              controller: controller,
-                              keyboardType: TextInputType.number,
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('取消'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(
-                                  context,
-                                  int.tryParse(controller.text),
-                                ),
-                                child: const Text('确定'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (go != null) onPageInput(go - 1);
-                      },
-                      child: const Text(
-                        '跳页',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PdfRasterPage extends StatefulWidget {
-  const _PdfRasterPage({required this.raster, this.fit = BoxFit.contain});
-
-  final PdfRaster raster;
+  final Future<PdfRaster> Function() load;
   final BoxFit fit;
-
+  final bool thumbnail;
   @override
-  State<_PdfRasterPage> createState() => _PdfRasterPageState();
+  State<_PdfRasterImage> createState() => _PdfRasterImageState();
 }
 
-class _PdfRasterPageState extends State<_PdfRasterPage> {
-  ui.Image? _image;
-
+class _PdfRasterImageState extends State<_PdfRasterImage> {
+  late final Future<PdfRaster> _future = widget.load();
   @override
-  void initState() {
-    super.initState();
-    _decode();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PdfRasterPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.raster != widget.raster) {
-      _image?.dispose();
-      _image = null;
-      _decode();
-    }
-  }
-
-  Future<void> _decode() async {
-    final image = await widget.raster.toImage();
-    if (!mounted) {
-      image.dispose();
-      return;
-    }
-    setState(() => _image = image);
-  }
-
-  @override
-  void dispose() {
-    _image?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final image = _image;
-    if (image == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return InteractiveViewer(
-      minScale: 0.8,
-      maxScale: 4,
-      child: SizedBox.expand(
-        child: ColoredBox(
-          color: Colors.white,
-          child: FittedBox(
-            fit: widget.fit,
-            child: SizedBox(
-              width: image.width.toDouble(),
-              height: image.height.toDouble(),
-              child: RawImage(image: image),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PdfRasterThumb extends StatefulWidget {
-  const _PdfRasterThumb({required this.raster});
-
-  final PdfRaster raster;
-
-  @override
-  State<_PdfRasterThumb> createState() => _PdfRasterThumbState();
-}
-
-class _PdfRasterThumbState extends State<_PdfRasterThumb> {
-  ui.Image? _image;
-
-  @override
-  void initState() {
-    super.initState();
-    _decode();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PdfRasterThumb oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.raster != widget.raster) {
-      _image?.dispose();
-      _image = null;
-      _decode();
-    }
-  }
-
-  Future<void> _decode() async {
-    final image = await widget.raster.toImage();
-    if (!mounted) {
-      image.dispose();
-      return;
-    }
-    setState(() => _image = image);
-  }
-
-  @override
-  void dispose() {
-    _image?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final image = _image;
-    if (image == null) {
-      return const ColoredBox(
-        color: Colors.black12,
-        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+  Widget build(BuildContext context) => FutureBuilder<PdfRaster>(
+    future: _future,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return const Center(child: Icon(Icons.broken_image_outlined));
+      }
+      if (!snapshot.hasData) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      final image = Image(
+        image: PdfRasterImage(snapshot.data!),
+        fit: widget.thumbnail ? BoxFit.cover : widget.fit,
       );
-    }
-    return ColoredBox(
-      color: Colors.white,
-      child: RawImage(image: image, fit: BoxFit.cover),
-    );
-  }
+      return ColoredBox(
+        color: Colors.white,
+        child: widget.thumbnail
+            ? image
+            : InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4,
+                child: SizedBox.expand(child: image),
+              ),
+      );
+    },
+  );
 }

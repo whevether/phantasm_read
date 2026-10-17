@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../common/reader_trial_limit.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -28,6 +30,7 @@ class EpubViewerController {
       _state?.search(query) ?? const [];
 
   Future<String?> currentCfi() async => _state?.currentCfi();
+  Future<String> currentText() async => await _state?._bridge?.getText() ?? '';
 }
 
 /// EPUB viewer using offline epub.js inside [webview_flutter].
@@ -46,8 +49,22 @@ class EpubViewer extends StatefulWidget {
     this.onReady,
     this.onError,
     this.onFontSizeChanged,
+    this.trialLimit,
+    this.onTrialBoundaryReached,
+    this.onPositionChanged,
   });
 
+  static bool get isSupported =>
+      !kIsWeb &&
+      {
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+        TargetPlatform.macOS,
+      }.contains(defaultTargetPlatform);
+
+  final ReaderTrialLimit? trialLimit;
+  final ValueChanged<bool>? onTrialBoundaryReached;
+  final void Function(int chapterIndex, double percentage)? onPositionChanged;
   final Uint8List bytes;
   final NovelTypography typography;
   final EpubViewerController? controller;
@@ -70,11 +87,14 @@ class _EpubViewerState extends State<EpubViewer> {
   EpubBridge? _bridge;
   String? _error;
   bool _shellReady = false;
+  bool _opening = false;
+  int _generation = 0;
   bool _bookOpened = false;
   String? _cfi;
 
-  String get _flow =>
-      widget.readingMode == NovelReadingMode.vertical ? 'scrolled' : 'paginated';
+  String get _flow => widget.readingMode == NovelReadingMode.vertical
+      ? 'scrolled'
+      : 'paginated';
 
   @override
   void initState() {
@@ -88,6 +108,11 @@ class _EpubViewerState extends State<EpubViewer> {
     if (widget.controller?._state == this) {
       widget.controller?._state = null;
     }
+    _generation++;
+    _controller
+        ?.runJavaScript("window.epubBridge && window.epubBridge.close()")
+        .catchError((Object _) {});
+    _bridge?.dispose();
     super.dispose();
   }
 
@@ -114,122 +139,162 @@ class _EpubViewerState extends State<EpubViewer> {
     return loc?['cfi'] as String? ?? _cfi;
   }
 
+  void _fail(Object error) {
+    if (!mounted) return;
+    widget.onError?.call('$error');
+    setState(() => _error = '$error');
+  }
+
   Future<void> _initWebView() async {
-    final controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel(
+    if (!EpubViewer.isSupported) {
+      _fail(
+        UnsupportedError(
+          'EPUB is supported on Android, iOS and macOS. Use text/comic/PDF on this platform.',
+        ),
+      );
+      return;
+    }
+    try {
+      final controller = WebViewController();
+      _controller = controller;
+      _bridge = EpubBridge(controller);
+      await controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      if (!mounted) return;
+      await controller.addJavaScriptChannel(
         'EpubChannel',
         onMessageReceived: (message) {
+          if (!mounted) return;
           final msg = EpubBridgeMessage.parse(message.message);
+          final payload = msg.payload;
           switch (msg.type) {
+            case 'response':
+              _bridge?.receive(payload);
             case 'shellReady':
               _shellReady = true;
               _openBookIfNeeded();
-            case 'ready':
-              _bookOpened = true;
-              _applyTypography();
-              if (widget.initialCfi != null) {
-                _bridge?.display(widget.initialCfi);
-              }
-              _loadChapters();
-              widget.onReady?.call();
             case 'locationChanged':
-              final payload = msg.payload;
-              String? cfi;
-              if (payload is Map) {
-                cfi = payload['cfi'] as String?;
-              }
-              _cfi = cfi;
-              widget.onLocationChanged?.call(cfi);
-            case 'fontSizeChanged':
-              final payload = msg.payload;
-              if (payload is Map) {
-                final percent = payload['percent'];
-                if (percent is num) {
-                  final px = (percent / 100.0) * 18.0;
-                  widget.onFontSizeChanged?.call(px.clamp(12.0, 36.0));
+              if (payload is Map && payload['cfi'] is String) {
+                _cfi = payload['cfi'];
+                final index = payload['chapterIndex'];
+                final percentage = payload['percentage'];
+                if (index is int && percentage is num) {
+                  widget.onPositionChanged?.call(
+                    index,
+                    percentage.toDouble().clamp(0, 1),
+                  );
                 }
+                widget.onLocationChanged?.call(_cfi);
+              }
+            case 'trialBoundary':
+              if (payload is Map) {
+                widget.onTrialBoundaryReached?.call(payload['next'] == true);
+              }
+            case 'fontSizeChanged':
+              if (payload is Map && payload['percent'] is num) {
+                widget.onFontSizeChanged?.call(
+                  ((payload['percent'] as num) / 100 * 18)
+                      .clamp(12, 36)
+                      .toDouble(),
+                );
               }
             case 'error':
-              final payload = msg.payload;
-              final text = payload is Map
-                  ? (payload['message']?.toString() ?? 'Unknown error')
-                  : payload?.toString() ?? 'Unknown error';
-              widget.onError?.call(text);
-              if (mounted) setState(() => _error = text);
+              _fail(
+                payload is Map
+                    ? payload['message'] ?? 'EPUB error'
+                    : 'EPUB error',
+              );
           }
         },
-      )
-      ..setNavigationDelegate(
+      );
+      await controller.setNavigationDelegate(
         NavigationDelegate(
-          onPageFinished: (_) {
-            _shellReady = true;
-            _openBookIfNeeded();
+          onNavigationRequest: (request) {
+            final uri = Uri.tryParse(request.url);
+            if (uri == null) return NavigationDecision.prevent;
+            final shell =
+                uri.path.endsWith('/assets/epubjs/reader.html') &&
+                (uri.scheme == 'file' ||
+                    uri.host == 'localhost' ||
+                    uri.host == '127.0.0.1');
+            if (shell ||
+                (!request.isMainFrame &&
+                    (uri.scheme == 'blob' || request.url == 'about:blank'))) {
+              return NavigationDecision.navigate;
+            }
+            return NavigationDecision.prevent;
           },
           onWebResourceError: (error) {
-            widget.onError?.call(error.description);
-            if (mounted) setState(() => _error = error.description);
+            if (error.isForMainFrame == true) _fail(error.description);
           },
         ),
       );
-
-    _controller = controller;
-    _bridge = EpubBridge(controller);
-
-    try {
+      if (!mounted) return;
       await controller.loadFlutterAsset(_assetReaderHtml);
-    } catch (_) {
-      try {
-        await controller.loadFlutterAsset('assets/epubjs/reader.html');
-      } catch (e2) {
-        // Web fallback: load HTML string with relative script tags may fail;
-        // surface clear error.
-        if (mounted) {
-          setState(() {
-            _error = kIsWeb
-                ? 'EPUB on web requires asset loading support: $e2'
-                : 'Failed to load EPUB shell: $e2';
-          });
-        }
-        return;
-      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      _fail(e);
     }
-
-    if (mounted) setState(() {});
   }
 
   Future<void> _openBookIfNeeded() async {
-    if (!_shellReady || _bookOpened || _bridge == null) return;
-    try {
-      final b64 = base64Encode(widget.bytes);
-      await _bridge!.openFromBase64(b64, flow: _flow);
-    } catch (e) {
-      widget.onError?.call(e.toString());
-      if (mounted) setState(() => _error = e.toString());
+    if (!mounted ||
+        !_shellReady ||
+        _bookOpened ||
+        _opening ||
+        _bridge == null) {
+      return;
     }
-  }
-
-  Future<void> _loadChapters() async {
+    final generation = _generation;
+    final bridge = _bridge!;
+    _opening = true;
     try {
-      widget.onChaptersLoaded?.call(await getChapters());
-    } catch (_) {
-      widget.onChaptersLoaded?.call(const []);
+      final limit = widget.trialLimit;
+      await bridge.openFromBase64(
+        base64Encode(widget.bytes),
+        flow: _flow,
+        trialStart: limit?.isActive == true ? limit!.startIndex : null,
+        trialCount: limit?.isActive == true ? limit!.maxCount : null,
+        initialCfi: widget.initialCfi,
+      );
+      if (!mounted || generation != _generation) return;
+      _bookOpened = true;
+      await _applyTypography();
+      final chapters = await bridge.getToc();
+      if (!mounted || generation != _generation) return;
+      widget.onChaptersLoaded?.call(chapters);
+      widget.onReady?.call();
+    } catch (e) {
+      if (generation == _generation) _fail(e);
+    } finally {
+      _opening = false;
+      if (mounted && generation != _generation) _openBookIfNeeded();
     }
   }
 
   Future<void> _applyTypography() async {
     final bridge = _bridge;
-    if (bridge == null) return;
-    final t = widget.typography;
-    await bridge.setFontSize(t.fontSize);
-    await bridge.setLineHeight(t.lineHeight);
-    await bridge.setFontFamily(t.fontFamily);
-    final bg = widget.backgroundColor ?? const Color(0xFFFFFFFF);
-    final fg = widget.foregroundColor ?? const Color(0xFF000000);
-    await bridge.setTheme(
-      background: _cssColor(bg),
-      foreground: _cssColor(fg),
-    );
+    if (bridge == null || !_bookOpened) return;
+    try {
+      final t = widget.typography;
+      await bridge.setFontSize(t.fontSize);
+      await bridge.setLineHeight(t.lineHeight);
+      await bridge.setFontFamily(t.fontFamily);
+      await bridge.setTypography(
+        letterSpacing: t.letterSpacing,
+        margin: t.pageMargin,
+        textAlign: t.textAlign.name,
+      );
+      await bridge.setTheme(
+        background: _cssColor(
+          widget.backgroundColor ?? const Color(0xFFFFFFFF),
+        ),
+        foreground: _cssColor(
+          widget.foregroundColor ?? const Color(0xFF000000),
+        ),
+      );
+    } catch (e) {
+      if (mounted) _fail(e);
+    }
   }
 
   String _cssColor(Color c) {
@@ -254,9 +319,12 @@ class _EpubViewerState extends State<EpubViewer> {
       _applyTypography();
     }
     if (oldWidget.readingMode != widget.readingMode && _bookOpened) {
-      _bridge?.setFlow(_flow).then((_) => _applyTypography());
+      _bridge?.setFlow(_flow).then((_) => _applyTypography()).catchError(_fail);
     }
-    if (oldWidget.bytes != widget.bytes) {
+    if (oldWidget.bytes != widget.bytes ||
+        oldWidget.trialLimit != widget.trialLimit) {
+      _generation++;
+      _error = null;
       _bookOpened = false;
       _openBookIfNeeded();
     }

@@ -8,12 +8,7 @@ enum ReaderTrialUnit {
 }
 
 /// What the user attempted when the trial cap blocked them.
-enum ReaderTrialLimitAction {
-  next,
-  seek,
-  chapterSelect,
-  search,
-}
+enum ReaderTrialLimitAction { next, seek, chapterSelect, search }
 
 /// Trial / preview window configured by the host app.
 ///
@@ -24,7 +19,7 @@ class ReaderTrialLimit {
     required this.maxCount,
     this.startIndex = 0,
     this.unit = ReaderTrialUnit.page,
-  });
+  }) : assert(startIndex >= 0);
 
   /// First [maxCount] pages starting at [startPage].
   factory ReaderTrialLimit.pages(int maxCount, {int startPage = 0}) {
@@ -57,7 +52,7 @@ class ReaderTrialLimit {
   /// Last readable index (inclusive) when there are [total] items.
   int maxReadableIndex(int total) {
     if (!isActive || total <= 0) return total - 1;
-    if (startIndex >= total) return startIndex;
+    if (startIndex >= total) return total - 1;
     final end = startIndex + maxCount;
     return (end - 1).clamp(startIndex, total - 1);
   }
@@ -71,8 +66,7 @@ class ReaderTrialLimit {
   }
 
   /// Whether more content exists after the trial window.
-  bool hasMoreBeyond(int total) =>
-      isActive && total > startIndex + maxCount;
+  bool hasMoreBeyond(int total) => isActive && total > startIndex + maxCount;
 
   bool isReadable(int index, int total) {
     if (index < 0 || index >= total) return false;
@@ -118,12 +112,14 @@ class ReaderTrialLimitEvent {
 typedef ReaderTrialLimitCallback = void Function(ReaderTrialLimitEvent event);
 
 /// Legacy helper — prefer [ReaderTrialLimit.visibleCount].
+@Deprecated('Use ReaderTrialLimit.visibleCount instead.')
 int trialPageCount(int total, int? maxReadablePages) {
   if (maxReadablePages == null || maxReadablePages <= 0) return total;
   return ReaderTrialLimit.pages(maxReadablePages).visibleCount(total);
 }
 
 /// Legacy helper — prefer [ReaderTrialLimit.clampIndex].
+@Deprecated('Use ReaderTrialLimit.clampIndex instead.')
 int clampTrialPage(int page, int total, int? maxReadablePages) {
   if (maxReadablePages == null || maxReadablePages <= 0) {
     return page.clamp(0, (total - 1).clamp(0, 1 << 30));
@@ -132,14 +128,15 @@ int clampTrialPage(int page, int total, int? maxReadablePages) {
 }
 
 /// Legacy helper — prefer [ReaderTrialLimit.hasMoreBeyond].
+@Deprecated('Use ReaderTrialLimit.hasMoreBeyond instead.')
 bool trialLimited(int total, int? maxReadable) =>
     maxReadable != null &&
     maxReadable > 0 &&
     ReaderTrialLimit.pages(maxReadable).hasMoreBeyond(total);
 
 /// Legacy helper — prefer [ReaderTrialLimit.atBoundary].
+@Deprecated('Use ReaderTrialLimit.atBoundary instead.')
 bool atTrialEnd(int currentIndex, int total, int? maxReadable) {
   if (maxReadable == null || maxReadable <= 0) return false;
-  return ReaderTrialLimit.pages(maxReadable)
-      .atBoundary(currentIndex, total);
+  return ReaderTrialLimit.pages(maxReadable).atBoundary(currentIndex, total);
 }
