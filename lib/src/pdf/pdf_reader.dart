@@ -15,6 +15,8 @@ import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
+import '../common/reader_stats.dart';
+import '../common/reader_strings.dart';
 import '../common/reader_trial_limit.dart';
 import '../common/reader_identity.dart';
 import '../common/reader_page_window.dart';
@@ -80,6 +82,8 @@ class PdfReader extends StatefulWidget {
     this.onPageChanged,
     this.onSettingsChanged,
     this.onSessionTick,
+    this.onStats,
+    this.strings = ReaderStrings.auto,
     this.onSync,
     this.showToolbar = true,
     this.rasterDpi = 120,
@@ -100,6 +104,12 @@ class PdfReader extends StatefulWidget {
   final ValueChanged<int>? onPageChanged;
   final ValueChanged<ReaderSettings>? onSettingsChanged;
   final ValueChanged<Duration>? onSessionTick;
+
+  /// Receives per-session reading stats (only readable pages are counted).
+  final ReaderStatsCallback? onStats;
+
+  /// Replaceable UI strings.
+  final ReaderStrings strings;
   final ReaderSyncCallback? onSync;
   final bool showToolbar;
   final double rasterDpi;
@@ -112,6 +122,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   late final ReaderBrightness _brightness = ReaderBrightness();
   late ReaderSettings _settings;
   late ComicReadingMode _mode;
+  ReaderStatsTracker? _stats;
   PageController? _pageController;
 
   int _totalPages = 0;
@@ -127,6 +138,11 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   DateTime? _sessionStarted;
   Timer? _sessionTimer;
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
+  bool _bookmarkBusy = false;
+
+  /// PDF has no webtoon strip; treat it as vertical.
+  static ComicReadingMode _normalizeMode(ComicReadingMode mode) =>
+      mode == ComicReadingMode.webtoon ? ComicReadingMode.vertical : mode;
 
   String get _bookId => widget.bookId ?? (_identity ??= widget.source.stableId);
 
@@ -196,11 +212,16 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     });
   }
 
+  /// Strings resolved against the ambient locale when `strings` is
+  /// [ReaderStrings.auto] (the default).
+  ReaderStrings get _strings =>
+      widget.strings.resolveFor(Localizations.maybeLocaleOf(context));
+
   @override
   void initState() {
     super.initState();
     _settings = widget.settings;
-    _mode = widget.readingMode;
+    _mode = _normalizeMode(widget.readingMode);
     if (_settings.doublePage && _mode == ComicReadingMode.vertical) {
       _mode = ComicReadingMode.horizontal;
     }
@@ -254,26 +275,44 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       if (!mounted || version != _loadVersion) return;
       _sessionTimer?.cancel();
       _sessionStarted = DateTime.now();
+      _stats = ReaderStatsTracker(
+        _bookId,
+        minDwell: const Duration(milliseconds: 800),
+      );
       _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted) {
           widget.onSessionTick?.call(
             DateTime.now().difference(_sessionStarted!),
           );
+          _emitStats();
         }
       });
       setState(() => _loading = false);
+      _recordVisit();
       if (_itemCount > 0) {
         widget.onPageChanged?.call(_contentPageIndex(_currentPage));
       }
     } catch (e) {
       if (mounted && version == _loadVersion) {
         setState(() {
-          _error = '$e';
+          _error = _describeError(e);
           _loading = false;
         });
       }
     }
   }
+
+  /// Localised, user-facing error text (encrypted PDFs get a clear hint).
+  String _describeError(Object e) {
+    final text = '$e';
+    final lower = text.toLowerCase();
+    if (lower.contains('encrypt') || lower.contains('password')) {
+      return '${_strings.loadFailed}: ${_strings.pdfEncrypted}';
+    }
+    return '${_strings.loadFailed}: $text';
+  }
+
+  static const _maxDownloadBytes = 300 * 1024 * 1024;
 
   Future<Uint8List> _loadBytes(PdfSource source) async {
     switch (source) {
@@ -282,7 +321,12 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       case PdfSourceBytes(:final bytes):
         return bytes;
       case PdfSourceUrl(:final url):
-        final response = await http.get(Uri.parse(url));
+        final response = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 60));
+        if (response.bodyBytes.length > _maxDownloadBytes) {
+          throw Exception('PDF is larger than 300 MB');
+        }
         if (response.statusCode != 200) {
           throw Exception('HTTP ${response.statusCode} loading $url');
         }
@@ -293,8 +337,23 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
     }
   }
 
+  /// Counts the current page (logical pages only address the readable window).
+  void _recordVisit() {
+    if (_loading || _totalPages == 0 || _itemCount == 0) return;
+    _stats?.visit(_contentPageIndex(_currentPage));
+  }
+
+  /// Stats are independent of progress persistence.
+  void _emitStats() {
+    final stats = _stats;
+    if (stats == null) return;
+    widget.onStats?.call(stats.snapshot());
+  }
+
   Future<void> _saveProgress() async {
-    if (!widget.persistProgress || (_totalPages == 0)) return;
+    if (_totalPages == 0) return;
+    _emitStats();
+    if (!widget.persistProgress) return;
     final content = _contentPageIndex(_currentPage);
     final progress = ReaderProgress(
       bookId: _bookId,
@@ -346,27 +405,29 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   void _goToPage(int logicalPage) {
     if ((_totalPages == 0) || _itemCount <= 0) return;
     final limit = widget.trialLimit;
-    final total = _totalPages;
-    var target = logicalPage;
     if (limit != null && limit.isActive) {
-      final contentTarget = _contentPageIndex(
-        logicalPage.clamp(0, _itemCount - 1),
-      );
-      if (logicalPage < 0 ||
-          logicalPage >= _itemCount ||
-          !limit.isReadable(contentTarget, total)) {
-        _notifyTrialLimit(
-          ReaderTrialLimitAction.seek,
-          logicalPage < 0 ? 0 : _contentPageIndex(_itemCount - 1) + 1,
+      // Only a real paywall when more content exists beyond the window.
+      if (logicalPage >= _itemCount && _hasMoreBeyondTrial) {
+        _trialGesture.call(
+          widget.onTrialLimitReached,
+          limit: limit,
+          currentIndex: _contentPageIndex(_currentPage),
+          targetIndex: _window.start + _window.visible,
+          totalCount: _totalPages,
+          action: ReaderTrialLimitAction.next,
         );
-        target = _logicalIndexForContent(
-          limit.clampIndex(contentTarget, total),
+      } else if (logicalPage < 0 && _window.start > 0) {
+        _trialGesture.call(
+          widget.onTrialLimitReached,
+          limit: limit,
+          currentIndex: _contentPageIndex(_currentPage),
+          targetIndex: _window.start - 1,
+          totalCount: _totalPages,
+          action: ReaderTrialLimitAction.seek,
         );
       }
-    } else {
-      target = logicalPage.clamp(0, _itemCount - 1);
     }
-    setState(() => _currentPage = target);
+    final target = logicalPage.clamp(0, _itemCount - 1);
     final c = _pageController;
     if (c != null && c.hasClients) {
       c.animateToPage(
@@ -375,31 +436,51 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
         curve: Curves.easeOut,
       );
     }
+    if (target == _currentPage) return;
+    setState(() => _currentPage = target);
     widget.onPageChanged?.call(_contentPageIndex(target));
+    _recordVisit();
     _saveProgress();
   }
 
   Future<void> _toggleBookmark() async {
-    final content = _contentPageIndex(_currentPage);
-    final existing = _bookmarks.where((b) => b.pageIndex == content);
-    if (existing.isNotEmpty) {
-      await ReaderBookmarkStore.instance.removeBookmark(
-        _bookId,
-        existing.first.id,
-      );
-    } else {
-      await ReaderBookmarkStore.instance.addBookmark(
-        ReaderBookmark(
-          id: readerRecordId(),
-          bookId: _bookId,
-          title: 'Page ${content + 1}',
-          pageIndex: content,
-        ),
-      );
+    if (_bookmarkBusy) return;
+    _bookmarkBusy = true;
+    try {
+      final content = _contentPageIndex(_currentPage);
+      final existing = _bookmarks.where((b) => b.pageIndex == content);
+      if (existing.isNotEmpty) {
+        await ReaderBookmarkStore.instance.removeBookmark(
+          _bookId,
+          existing.first.id,
+        );
+      } else {
+        // The title is derived from the page index at display time.
+        await ReaderBookmarkStore.instance.addBookmark(
+          ReaderBookmark(
+            id: readerRecordId(),
+            bookId: _bookId,
+            title: '',
+            pageIndex: content,
+          ),
+        );
+      }
+      _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+      await _saveProgress();
+      if (mounted) setState(() {});
+    } finally {
+      _bookmarkBusy = false;
     }
-    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-    await _saveProgress();
-    if (mounted) setState(() {});
+  }
+
+  /// Bookmarks created by older versions stored an English "Page N" title.
+  String _bookmarkLabel(ReaderBookmark b) {
+    final index = b.pageIndex;
+    final legacy = RegExp(r'^Page \d+$').hasMatch(b.title);
+    if (index != null && (b.title.isEmpty || legacy)) {
+      return _strings.pageN(index + 1);
+    }
+    return b.title;
   }
 
   Future<void> _showBookmarks() async {
@@ -408,10 +489,10 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       builder: (context) {
         return ListView(
           children: [
-            const ListTile(title: Text('书签')),
+            ListTile(title: Text(_strings.bookmarks)),
             for (final b in _bookmarks)
               ListTile(
-                title: Text(b.title),
+                title: Text(_bookmarkLabel(b)),
                 onTap: () {
                   Navigator.pop(context);
                   if (b.pageIndex != null) {
@@ -419,6 +500,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                   }
                 },
                 trailing: IconButton(
+                  tooltip: _strings.delete,
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
                     await ReaderBookmarkStore.instance.removeBookmark(
@@ -455,12 +537,17 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
             itemCount: _window.visible,
             itemBuilder: (context, i) {
               final index = _window.start + i;
-              return GestureDetector(
-                onTap: () {
-                  Navigator.pop(context);
-                  _goToContent(index);
-                },
-                child: _rasterWidget(index, thumbnail: true),
+              return Semantics(
+                button: true,
+                label: _strings.pageN(index + 1),
+                child: GestureDetector(
+                  excludeFromSemantics: true,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _goToContent(index);
+                  },
+                  child: _rasterWidget(index, thumbnail: true),
+                ),
               );
             },
           ),
@@ -470,16 +557,22 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    final volume =
+        _settings.volumeKeyPaging &&
+        (key == LogicalKeyboardKey.audioVolumeUp ||
+            key == LogicalKeyboardKey.audioVolumeDown);
+    // Swallow key repeats of the volume keys too (no system volume change).
+    if (event is KeyRepeatEvent && volume) return KeyEventResult.handled;
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final rtl = widget.rtl && _mode == ComicReadingMode.horizontal;
-    if (key == LogicalKeyboardKey.audioVolumeUp ||
+    if ((volume && key == LogicalKeyboardKey.audioVolumeUp) ||
         key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.pageDown) {
       _goToPage(_currentPage + (rtl ? -1 : 1));
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.audioVolumeDown ||
+    if ((volume && key == LogicalKeyboardKey.audioVolumeDown) ||
         key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.pageUp) {
       _goToPage(_currentPage + (rtl ? 1 : -1));
@@ -538,17 +631,28 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _rasterCache?.dispose();
       _rasterCache = null;
       _totalPages = 0;
-      _mode = widget.readingMode;
+      _mode = _normalizeMode(widget.readingMode);
       _bootstrap(restorePage: restore);
       return;
     }
-    final content = _contentPageIndex(_currentPage);
+    // Absolute page via the OLD window, then back through the new one.
+    final content = ReaderPageWindow(
+      _totalPages,
+      trial: oldWidget.trialLimit,
+      doublePage: _doublePageActive,
+    ).content(_currentPage);
     if (oldWidget.settings != widget.settings) {
       _settings = widget.settings;
       _session.apply(_settings);
     }
-    if (oldWidget.readingMode != widget.readingMode) _mode = widget.readingMode;
+    if (oldWidget.readingMode != widget.readingMode) {
+      _mode = _normalizeMode(widget.readingMode);
+    }
     _currentPage = _logicalIndexForContent(content);
+    if (oldWidget.trialLimit != widget.trialLimit && _totalPages > 0) {
+      final now = _contentPageIndex(_currentPage);
+      if (now != content) widget.onPageChanged?.call(now);
+    }
     if (oldWidget.settings != widget.settings ||
         oldWidget.readingMode != widget.readingMode ||
         oldWidget.trialLimit != widget.trialLimit) {
@@ -559,7 +663,10 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      _stats?.pause();
       _saveProgress();
+    } else if (state == AppLifecycleState.resumed) {
+      _stats?.resume();
     }
   }
 
@@ -579,14 +686,19 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return Center(child: Text(_error!, textAlign: TextAlign.center));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(_error!, textAlign: TextAlign.center),
+        ),
+      );
     }
     if (_loading || _pageController == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
     if (_itemCount == 0) {
-      return const Center(child: Text('No readable content'));
+      return Center(child: Text(_strings.noReadableContent));
     }
     final controller = _pageController!;
     final progress = _itemCount == 0 ? 0.0 : (_currentPage + 1) / _itemCount;
@@ -604,51 +716,61 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
             children: [
               ColoredBox(color: Color(_settings.comicBackground)),
               if ((_totalPages > 0))
-                GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTapUp: (_) {
-                    if (widget.showToolbar) {
-                      setState(() => _toolbarVisible = !_toolbarVisible);
-                    }
-                  },
-                  child: PageView.builder(
-                    key: ValueKey(
-                      '${_mode.name}-${_settings.doublePage}-'
-                      '${widget.rtl}-$_pageViewCount',
+                Semantics(
+                  button: widget.showToolbar,
+                  label: _strings.toggleToolbar,
+                  onTap: widget.showToolbar
+                      ? () => setState(() => _toolbarVisible = !_toolbarVisible)
+                      : null,
+                  child: GestureDetector(
+                    excludeFromSemantics: true,
+                    behavior: HitTestBehavior.translucent,
+                    onTapUp: (_) {
+                      if (widget.showToolbar) {
+                        setState(() => _toolbarVisible = !_toolbarVisible);
+                      }
+                    },
+                    child: PageView.builder(
+                      key: ValueKey(
+                        '${_mode.name}-${_settings.doublePage}-'
+                        '${widget.rtl}-$_pageViewCount',
+                      ),
+                      controller: controller,
+                      itemCount: _pageViewCount,
+                      scrollDirection: _mode == ComicReadingMode.vertical
+                          ? Axis.vertical
+                          : Axis.horizontal,
+                      reverse:
+                          widget.rtl && _mode == ComicReadingMode.horizontal,
+                      onPageChanged: (i) {
+                        if (isTrialNextSentinel(
+                          index: i,
+                          readableCount: _itemCount,
+                          hasMoreBeyond: _hasMoreBeyondTrial,
+                        )) {
+                          _onTrialNextSentinel();
+                          return;
+                        }
+                        setState(() => _currentPage = i);
+                        widget.onPageChanged?.call(_contentPageIndex(i));
+                        _recordVisit();
+                        _saveProgress();
+                      },
+                      itemBuilder: (context, index) {
+                        if (isTrialNextSentinel(
+                          index: index,
+                          readableCount: _itemCount,
+                          hasMoreBeyond: _hasMoreBeyondTrial,
+                        )) {
+                          return const SizedBox.expand();
+                        }
+                        return _buildPage(index);
+                      },
                     ),
-                    controller: controller,
-                    itemCount: _pageViewCount,
-                    scrollDirection: _mode == ComicReadingMode.vertical
-                        ? Axis.vertical
-                        : Axis.horizontal,
-                    reverse: widget.rtl && _mode == ComicReadingMode.horizontal,
-                    onPageChanged: (i) {
-                      if (isTrialNextSentinel(
-                        index: i,
-                        readableCount: _itemCount,
-                        hasMoreBeyond: _hasMoreBeyondTrial,
-                      )) {
-                        _onTrialNextSentinel();
-                        return;
-                      }
-                      setState(() => _currentPage = i);
-                      widget.onPageChanged?.call(_contentPageIndex(i));
-                      _saveProgress();
-                    },
-                    itemBuilder: (context, index) {
-                      if (isTrialNextSentinel(
-                        index: index,
-                        readableCount: _itemCount,
-                        hasMoreBeyond: _hasMoreBeyondTrial,
-                      )) {
-                        return const SizedBox.expand();
-                      }
-                      return _buildPage(index);
-                    },
                   ),
                 )
               else
-                const Center(child: Text('Empty PDF')),
+                Center(child: Text(_strings.emptyDocument)),
               BrightnessOverlay(
                 brightness: _brightness.value,
                 mode: _brightness.mode,
@@ -660,17 +782,20 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                 bookId: _bookId,
                 location: '$content',
                 enabled: widget.enableInk,
+                strings: _strings,
               ),
               if (!_toolbarVisible && (_totalPages > 0))
                 ReaderProgressBar(
+                  semanticsLabel: _strings.progress,
                   progress: progress,
                   onSeek: (v) => _goToPage((v * (_itemCount - 1)).round()),
                 ),
               if (widget.showToolbar && _toolbarVisible)
                 PageReaderToolbar(
-                  pageLabel: (_totalPages == 0)
-                      ? 'PDF · loading…'
-                      : 'PDF · ${content + 1} / $_totalPages',
+                  strings: _strings,
+                  allowWebtoon: false,
+                  currentPage: content + 1,
+                  totalPages: _totalPages,
                   progress: progress,
                   settings: _settings,
                   mode: _mode,
@@ -678,7 +803,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                   onModeChanged: (mode) {
                     final c = _contentPageIndex(_currentPage);
                     setState(() {
-                      _mode = mode;
+                      _mode = _normalizeMode(mode);
                       if (_settings.doublePage &&
                           _mode == ComicReadingMode.vertical) {
                         _mode = ComicReadingMode.horizontal;

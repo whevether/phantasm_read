@@ -10,11 +10,16 @@ plugins {
 
 val localProperties = Properties()
 
-// 加载打包 key（测试用，见 example/jks/ 与 android/key.properties）
+// Optional local signing key (git-ignored, see example/jks/README.md and
+// android/key.properties.example). Without it release builds use debug signing.
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
-    localProperties.load(FileInputStream(keystorePropertiesFile))
+    FileInputStream(keystorePropertiesFile).use { localProperties.load(it) }
 }
+val hasReleaseKey =
+    listOf("keyAlias", "keyPassword", "storeFile", "storePassword").all {
+        !(localProperties.getProperty(it) ?: "").isBlank()
+    } && file(localProperties.getProperty("storeFile")).exists()
 
 android {
     namespace = "com.phantasm.phantasm_read_example"
@@ -59,11 +64,13 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = localProperties["keyAlias"] as String
-            keyPassword = localProperties["keyPassword"] as String
-            storeFile = localProperties["storeFile"]?.let { file(it as String) }
-            storePassword = localProperties["storePassword"] as String
+        if (hasReleaseKey) {
+            create("release") {
+                keyAlias = localProperties.getProperty("keyAlias")
+                keyPassword = localProperties.getProperty("keyPassword")
+                storeFile = file(localProperties.getProperty("storeFile"))
+                storePassword = localProperties.getProperty("storePassword")
+            }
         }
     }
 
@@ -75,7 +82,11 @@ android {
             ndk {
                 debugSymbolLevel = "NONE"
             }
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

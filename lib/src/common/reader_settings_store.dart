@@ -1,9 +1,10 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:synchronized/synchronized.dart';
 
 import 'novel_reading_mode.dart';
 import 'novel_typography.dart';
+import 'reader_kv.dart';
 import 'reader_settings.dart';
 
 /// Persist global reader preferences.
@@ -13,14 +14,36 @@ class ReaderSettingsStore {
 
   static const _key = 'phantasm_reader_settings';
 
-  Future<void> save(ReaderSettings settings) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(_toJson(settings)));
+  final _lock = Lock();
+  ReaderSettings? _queued;
+  Future<void>? _draining;
+
+  /// Persists [settings]. Rapid successive calls (slider drags) are coalesced:
+  /// while a write is in flight only the most recent value is kept and
+  /// written next. The returned future completes once [settings] (or a newer
+  /// value) has been stored.
+  Future<void> save(ReaderSettings settings) {
+    _queued = settings;
+    return _draining ??= _drain();
+  }
+
+  Future<void> _drain() async {
+    try {
+      while (_queued != null) {
+        final next = _queued!;
+        _queued = null;
+        await _lock.synchronized(
+          () => ReaderKv.setString(_key, jsonEncode(_toJson(next))),
+        );
+      }
+    } finally {
+      _draining = null;
+    }
   }
 
   Future<ReaderSettings?> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
+    await _draining;
+    final raw = await ReaderKv.getString(_key);
     if (raw == null) return null;
     try {
       return _fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
@@ -46,6 +69,8 @@ class ReaderSettingsStore {
     'comicBackground': s.comicBackground,
     'tapZonesEnabled': s.tapZonesEnabled,
     'immersive': s.immersive,
+    'volumeKeyPaging': s.volumeKeyPaging,
+    'comicAutoCrop': s.comicAutoCrop,
   };
 
   ReaderSettings _fromJson(Map<String, dynamic> json) {
@@ -77,6 +102,8 @@ class ReaderSettingsStore {
       comicBackground: json['comicBackground'] as int? ?? 0xFF000000,
       tapZonesEnabled: json['tapZonesEnabled'] as bool? ?? true,
       immersive: json['immersive'] as bool? ?? true,
+      volumeKeyPaging: json['volumeKeyPaging'] as bool? ?? false,
+      comicAutoCrop: json['comicAutoCrop'] as bool? ?? false,
     );
   }
 }

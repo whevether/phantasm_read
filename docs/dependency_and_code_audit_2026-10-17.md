@@ -8,8 +8,8 @@
 
 | 依赖 | 原配置/资源 | 本次结果 |
 |---|---|---|
-| material_ui（主包和 example） | ^1.6.0 | ^1.7.0，实际解析 1.7.0 |
-| archive | 4.4.0 | 4.5.2 |
+| material_ui（主包和 example） | ^1.6.0 | ^1.11.1，实际解析 1.11.1（2026-11-17 更新） |
+| archive | 4.4.0 | 4.7.1（2026-11-17 更新，pubspec 为 ^ 范围） |
 | JSZip（内嵌文件） | 3.10.1 | 3.10.2，校验 npm 发布包 SHA-512 后提取 |
 | Gradle | 9.8.0 | 9.8.1，使用官方发布地址并写入 SHA-256 |
 | Android Gradle Plugin | 9.4.2 | 9.4.1；原 9.4.2 的官方 POM 返回 404，官方元数据最新稳定版为 9.4.1 |
@@ -255,15 +255,36 @@ NovelReader 外部 settings 更新仅应用亮度，不同步 keepScreenOn/immer
 3. 功能完整性：A13、A16–A18、A22、A24、A26。
 4. 在对应问题修复并验证后，再选择 R01–R06 重构或清理。
 
-全部修复已获用户授权；未提交或推送 Git。公开旧 API 保留弃用标记，避免直接删除造成兼容性破坏。
+全部修复已获用户授权。公开旧 API 保留弃用标记，避免直接删除造成兼容性破坏；发布前的提交、打标签与推送由维护者自行执行。
+
+## 2026-11-17 功能补全与深度核查记录（0.0.9）
+
+功能补全：
+- 音量键翻页（默认关闭）、`ReaderStats`/`onStats`、`ReaderStrings`、`loadReaderCustomFont`、`ChineseTextConverter`（63 个常用字）、条漫连续滚动、自动裁边（默认关闭）、`NovelReader.customFonts`、阅读区/进度条 `Semantics`；格式评估见 [format_feasibility.md](format_feasibility.md)。按需求不实现截屏防护。
+- 多语言：泰语、越南语、印尼语、马来语、菲律宾语预设（人工整理，未经母语者审校），0.0.9 新增繁体 `zhHant`、`ReaderStrings.auto`（跟随环境 Locale）与约 25 个字段。
+- 仍未做：MOBI/AZW3/FB2、CBR/RAR；章节连读仅提供 `onNextChapterRequested` 回调。
+
+深度核查并修复（P0–P3，详见 CHANGELOG 0.0.9）：
+- P0：试读窗口覆盖文本搜索、恢复位置、书签/高亮/朗读/叠加字幕/自动滚动，EPUB 边界失败即关闭；销毁时缓存位置并保存、笔迹互不覆盖；条漫闭环与跳转；EPUB 相对/片段链接与找不到锚点；自动裁边图片泄漏；签名文件取消跟踪并回退调试签名，依赖改为 `^` 范围。
+- P1：EPUB 多字体与按需边界；文本按行分页、编码打分、多语言章节、NFC 搜索；i18n/无障碍（tooltip、滑块语义、去重语义、工具栏滚动、zh-Hant、TTS 语言与分段）；异步（overlay 串行、store 加锁、`ReaderSyncHub` 串行与异常隔离、设置保存合并、字节哈希缓存、音量键重复事件）；统计（Stopwatch、驻留阈值、与 `persistProgress` 无关）。
+- P2：大文本分时分页、EPUB 分块传输、PDF 并发/超时/大小限制与加密提示、RTL、HTML 实体、译文润色。
+- 测试中发现并修复：搜索面板 `setState` 回调返回 Future 导致调试断言。
+
+本轮未完成或未验证：
+- PDF 仍须先扫描全部页数才显示首页（未做“首页优先”）。
+- 加密 PDF 的识别依赖平台错误文本；Android 编码别名、超大 EPUB、读屏实际体验均未在真机验证。
+- EPUB 页未加 CSP（缺少真机回归，避免引入白屏风险）。
+- 译文未经母语者审校。
 
 ## 最终验证记录
 
-- `flutter analyze --no-pub`：No issues found；`dart analyze` 同样通过。
-- `flutter test --no-pub`：33 项全部通过，包含原有 8 项及新增 25 项回归测试。
-- 真实 EPUB 浏览器测试：压缩包解析、嵌套目录与章节位置、spine 搜索、异步回复、脚本隔离、章节和锚点试读裁剪、阅读流切换与字体重置通过。运行方式见 [浏览器测试说明](../test/js/README.md)。
-- `flutter build web --no-pub`：成功，Wasm dry run 成功，Cupertino 字体已打包，原缺失字体警告消除。
-- `flutter build apk --debug --no-pub`：成功，产物为 `example/build/app/outputs/flutter-apk/app-debug.apk`。
+2026-11-17（0.0.9）：
+- `flutter analyze`：No issues found。
+- `flutter test`：80 项全部通过（2026-10-17 基线为 33 项，本轮含深度核查回归测试）。
+- `flutter build web`（example 目录）：成功；Wasm dry run 成功。
+- 真实 EPUB 浏览器测试（`test/js/epub_shell_test.cjs`）：通过，覆盖压缩包解析、嵌套目录、spine 搜索、异步回复、脚本隔离、章节/锚点试读裁剪、阅读流切换与字体重置、分块上传、书籍语言、失效链接与缺失锚点、多自定义字体、强制 RTL。运行方式见 [浏览器测试说明](../test/js/README.md)。
 - `git diff --check`：通过。
+- 2026-10-17 阶段另验证过 `flutter build apk --debug`（成功）；0.0.9 未重新构建 APK，也未运行 iOS/macOS/Windows/Linux 原生构建。
+- 签名文件 `example/android/key.properties`、`example/jks/phantasm_read_test.jks` 已从 Git 索引移除（本机文件保留）；它们仍存在于历史提交中，其中的测试口令应视为已泄露，建议轮换并按需清理历史。
 
 打印和音频在 Dart 单元测试中使用平台替身；EPUB 浏览器测试使用真实 EPUB.js 和临时 Chrome 上下文。以上不代表已完成所有平台真机验证。EPUB 官方后端仍限 Android/iOS/macOS，其余平台显示明确提示。

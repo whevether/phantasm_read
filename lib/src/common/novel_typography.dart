@@ -45,4 +45,25 @@ class NovelTypography {
       pageMargin: pageMargin ?? this.pageMargin,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NovelTypography &&
+          other.fontSize == fontSize &&
+          other.lineHeight == lineHeight &&
+          other.fontFamily == fontFamily &&
+          other.letterSpacing == letterSpacing &&
+          other.textAlign == textAlign &&
+          other.pageMargin == pageMargin;
+
+  @override
+  int get hashCode => Object.hash(
+    fontSize,
+    lineHeight,
+    fontFamily,
+    letterSpacing,
+    textAlign,
+    pageMargin,
+  );
 }

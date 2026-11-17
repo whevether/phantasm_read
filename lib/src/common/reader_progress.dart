@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import 'reader_kv.dart';
 
 /// Reading progress for a book identified by [bookId].
 class ReaderProgress {
@@ -51,7 +51,7 @@ class ReaderProgress {
   }
 }
 
-/// Persist / restore reading progress via SharedPreferences.
+/// Persist / restore reading progress via ToStore.
 class ReaderProgressStore {
   ReaderProgressStore._();
   static final ReaderProgressStore instance = ReaderProgressStore._();
@@ -59,16 +59,14 @@ class ReaderProgressStore {
   static const _prefix = 'phantasm_progress_';
 
   Future<void> save(ReaderProgress progress) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    await ReaderKv.setString(
       '$_prefix${progress.bookId}',
       jsonEncode(progress.toJson()),
     );
   }
 
   Future<ReaderProgress?> load(String bookId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$_prefix$bookId');
+    final raw = await ReaderKv.getString('$_prefix$bookId');
     if (raw == null) return null;
     try {
       return ReaderProgress.fromJson(
@@ -99,7 +97,6 @@ class ReaderProgressStore {
   }
 
   Future<void> clear(String bookId) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_prefix$bookId');
+    await ReaderKv.remove('$_prefix$bookId');
   }
 }

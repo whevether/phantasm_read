@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.8`）。
+跨平台 Flutter 漫画 / 小说 / PDF 阅读器 package（`0.0.9`）。
 
 [English](README.md)
 
@@ -12,8 +12,10 @@
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.8
+  phantasm_read: ^0.0.9
 ```
+
+宿主前置条件：与 Material 组件混用时，请在应用内容外包一层 `material_ui` 的 `MaterialUiCompatibilityBridge`；媒体叠加字幕/有声书依赖 `audioplayers`，请确认目标平台可用。阅读器界面语言由环境 `Locale` 决定（`strings` 默认 `ReaderStrings.auto`），需要固定语言时传入 `ReaderStrings.zh` 等。
 
 许可证：[MIT](LICENSE)
 
@@ -367,19 +369,31 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 
 | 项 | 现状 |
 |----|------|
-| `ComicReader.pageTurnEffect` | 参数已声明；漫画主路径仍为 `ExtendedImageGesturePageView`，需自行使用 `CurlPageView` |
+| `ComicReader.pageTurnEffect` | 对横向翻页使用 `PageCurl`；竖向与条漫模式为普通滚动，无卷页 |
 | 漫画双页 | 仅横向生效；开启双页时若当前为竖向会自动切横向 |
 | EPUB 试读 | 章级拦截与回调；EPUB 内连续翻页越界依赖章节边界，深度跳转可能需宿主配合 |
-| EPUB TTS | 文本路径可读当前段；EPUB 侧不朗读正文 |
+| TTS | 文本路径朗读当前段，EPUB 朗读当前可见页文字；长文本分段朗读。可设 `NovelReader.ttsLanguage`（引擎需实现 `NovelTtsLanguageAware`），EPUB 默认取 `dc:language` |
 | 自动滚屏 | 仅文本路径；EPUB 无效 |
 | Media Overlay → EPUB | karaoke 按段落跳转，不跟 CFI |
 | 小说书签 / 高亮列表 UI | 可增删入库；无独立列表页（漫画有书签列表） |
-| 墨迹批注 | `enableInk` 可画；工具栏无撤销/清空入口；默认不持久化 |
+| 墨迹批注 | `enableInk`；工具栏有撤销/清空；按书籍与位置保存（`ReaderInk`） |
 | PDF 大文件 | 逐页光栅化，页数多 / `rasterDpi` 高时内存与耗时增加 |
 | Android PDF | 系统 `PdfRenderer` 需 **PDF 1.7+**、未加密；低版本或手写 PDF 可能无法渲染 |
 | Markdown / HTML URL | 无 `*Url` 工厂（仅 file / asset） |
 | 本地文件路径 | Web 等平台上 file 源可能 `UnsupportedError`，请用 asset / url / bytes |
 | `onSync` | 仅为宿主钩子，包内不实现云上传 |
+| 截屏防护 | 不提供（按需求不实现原生防截屏） |
+| MOBI/AZW3/FB2/CBR/RAR | 未内置，见 [docs/format_feasibility.md](docs/format_feasibility.md) |
+| `ChineseTextConverter` | 仅单字映射、63 个常用字，不含词组转换 |
+| 自动裁边 | `ReaderSettings.comicAutoCrop`（默认关闭，工具栏可开）；按像素检测纯色边，每边最多裁 20%，仅处理可读页，结果由 `ImageCache` 缓存 |
+| 条漫连续滚动 | `ComicReadingMode.webtoon`（`ComicWebtoonView`），工具栏方向键循环切换；页码以视口中线所在页为准 |
+| 自定义字体 | `NovelReader.customFonts`：文本走 `FontLoader`，EPUB 走 `@font-face`；同一字体族名再次注册对文本无效（Flutter 无法卸载字体） |
+| 音量键 | `ReaderSettings.volumeKeyPaging` 仅在平台把音量键交给 Flutter 时有效（Android 实体键且阅读器有焦点）；按键重复事件会被吞掉 |
+| Web 文本编码 | Web 上 GBK/Big5/Shift_JIS 解码依赖平台 `TextDecoder`，冷门编码请在目标浏览器验证 |
+| 书签标题 | 保存为空，显示时按当前语言生成（`第 N 页` / `第 N 段`）；旧的 `Page N` 标题读取时本地化 |
+| 同步 | `ReaderSyncHub` 串行发送并吞掉宿主异常（用 `onError` 观察）；包内不合并远端数据（`ReaderSyncConflictPolicy` 仅供参考） |
+| 多语言界面 | 工具栏、笔迹、搜索、排版面板文案均来自 `ReaderStrings`；`strings` 默认 `ReaderStrings.auto`（跟随环境 `Locale`）。内置预设：`zh`、繁体 `zhHant`、`en`、泰语 `th`、越南语 `vi`、印尼语 `id`、马来语 `ms`、菲律宾语 `fil`；用 `ReaderStrings.forLocale(Locale)` 或 `forLanguageCode('th')` 选择（支持别名 `in`、`tl`，未知语言回退英文），再传给各阅读器的 `strings:` |
+| `onStats` / `strings` | `ComicReader`、`NovelReader`、`PdfReader` 均支持；统计仅计入可读页 |
 
 ---
 
@@ -419,6 +433,6 @@ flutter run
 
 `NovelTypography.copyWith(fontFamily: null)` 恢复系统字体，省略该参数保留原字体。旧 tap-zone/trial helper API 保留并标记弃用。`ReaderTrialLimit.maxCount <= 0` 保留“不限制”的兼容语义。
 
-PDF 使用 8 DPI 的轻量页数扫描，高分辨率页面按需光栅化，缓存上限 32 MiB，缩略图使用 24 DPI。大文档的页数扫描仍需要时间。CBZ 支持 `ComicArchive.fromBytesAsync` 在后台 isolate 解压，默认限制压缩包 64 MiB、解压图像总计 256 MiB、5000 张图片。
+PDF 使用 8 DPI 的轻量页数扫描，高分辨率页面按需光栅化，缓存上限 32 MiB，缩略图使用 24 DPI。大文档的页数扫描仍需要时间，且发生在首页显示之前；同时最多 2 路并发光栅化，加密 PDF 会给出本地化提示；URL 来源 60 秒超时、上限 300 MiB。CBZ 支持 `ComicArchive.fromBytesAsync` 在后台 isolate 解压，默认限制压缩包 64 MiB、解压图像总计 256 MiB、5000 张图片。
 
 手绘按书籍及页/文本锚点自动保存归一化坐标，开启手绘时支持撤销和清空。EPUB 默认禁止书籍脚本和外部导航；试读约束同时作用于章节导航、搜索和渲染内容。

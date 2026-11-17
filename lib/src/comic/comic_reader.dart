@@ -14,6 +14,8 @@ import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
+import '../common/reader_stats.dart';
+import '../common/reader_strings.dart';
 import '../common/reader_trial_limit.dart';
 import '../common/reader_page_window.dart';
 import '../common/page_reader_toolbar.dart';
@@ -21,9 +23,11 @@ import '../common/reader_identity.dart';
 import '../common/reader_watermark.dart';
 import '../common/tap_zones.dart';
 import '../common/trial_gesture_boundary.dart';
+import 'comic_cropped_image_provider.dart';
 import 'comic_network_cache.dart';
 import 'comic_pages.dart';
 import 'comic_reading_mode.dart';
+import 'comic_webtoon_view.dart';
 
 /// Image comic reader powered by `extended_image` 10.1.0.
 class ComicReader extends StatefulWidget {
@@ -47,7 +51,20 @@ class ComicReader extends StatefulWidget {
     this.onSessionTick,
     this.onSync,
     this.showToolbar = true,
+    this.onNextChapterRequested,
+    this.onStats,
+    this.strings = ReaderStrings.auto,
   });
+
+  /// Receives per-session reading stats (only readable pages are counted).
+  final ReaderStatsCallback? onStats;
+
+  /// Replaceable UI strings.
+  final ReaderStrings strings;
+
+  /// Called when the user tries to go past the last page and the content is
+  /// not trial-limited. The host may swap in the next chapter's pages.
+  final VoidCallback? onNextChapterRequested;
 
   final ComicPages pages;
   final String? bookId;
@@ -88,6 +105,10 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
   String? _error;
   bool _loading = true;
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
+  final TrialGestureNotifier _chapterGesture = TrialGestureNotifier();
+  final ComicWebtoonController _webtoon = ComicWebtoonController();
+  ReaderStatsTracker? _stats;
+  bool _bookmarkBusy = false;
 
   String get _bookId => widget.bookId ?? (_identity ??= widget.pages.stableId);
 
@@ -176,6 +197,11 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
     });
   }
 
+  /// Strings resolved against the ambient locale when `strings` is
+  /// [ReaderStrings.auto] (the default).
+  ReaderStrings get _strings =>
+      widget.strings.resolveFor(Localizations.maybeLocaleOf(context));
+
   @override
   void initState() {
     super.initState();
@@ -240,26 +266,45 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
       if (!mounted || version != _loadVersion) return;
       _sessionTimer?.cancel();
       _sessionStarted = DateTime.now();
+      _stats = ReaderStatsTracker(
+        bookId,
+        minDwell: const Duration(milliseconds: 800),
+      );
       _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted) {
           widget.onSessionTick?.call(
             DateTime.now().difference(_sessionStarted!),
           );
+          _emitStats();
         }
       });
       setState(() => _loading = false);
+      _recordVisit();
     } catch (e) {
       if (mounted && version == _loadVersion) setState(() => _error = '$e');
     }
   }
 
+  /// Counts the current page (always a readable one: logical pages only
+  /// address the trial window).
+  void _recordVisit() {
+    if (_loading || widget.pages.length == 0 || _pageCount == 0) return;
+    _stats?.visit(_currentRawIndex);
+  }
+
+  /// Stats are independent of progress persistence.
+  void _emitStats() {
+    final stats = _stats;
+    if (stats == null) return;
+    widget.onStats?.call(stats.snapshot());
+  }
+
   Future<void> _saveProgress() async {
-    if (!widget.persistProgress ||
-        _loading ||
-        _pageController == null ||
-        widget.pages.length == 0) {
+    if (_loading || _pageController == null || widget.pages.length == 0) {
       return;
     }
+    _emitStats();
+    if (!widget.persistProgress) return;
     final progress = ReaderProgress(
       bookId: _bookId,
       pageIndex: _currentRawIndex,
@@ -290,7 +335,18 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
       _bootstrap();
       return;
     }
-    final raw = _currentRawIndex;
+    // Convert the logical page to an absolute one with the OLD window, then
+    // back with the new window: a changed trial range/double-page layout
+    // must keep the reader on the same content page.
+    final oldWindow = ReaderPageWindow(
+      oldWidget.pages.length,
+      trial: oldWidget.trialLimit,
+      doublePage:
+          _settings.doublePage &&
+          _mode == ComicReadingMode.horizontal &&
+          oldWidget.pages.length > 1,
+    );
+    final raw = oldWindow.content(_currentPage);
     if (oldWidget.settings != widget.settings) {
       _settings = widget.settings;
       _session.apply(_settings);
@@ -298,12 +354,19 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
     if (oldWidget.readingMode != widget.readingMode) _mode = widget.readingMode;
     _currentPage = _logicalIndexForRaw(raw);
     _syncPageIndexAfterLayoutChange();
+    if (oldWidget.trialLimit != widget.trialLimit) {
+      final now = _currentRawIndex;
+      if (now != raw) widget.onPageChanged?.call(now);
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      _stats?.pause();
       _saveProgress();
+    } else if (state == AppLifecycleState.resumed) {
+      _stats?.resume();
     }
   }
 
@@ -319,7 +382,10 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  ImageProvider _providerAt(int index) => widget.pages.imageProviderAt(index);
+  ImageProvider _providerAt(int index) {
+    final source = widget.pages.imageProviderAt(index);
+    return _settings.comicAutoCrop ? CroppedImageProvider(source) : source;
+  }
 
   Future<void> _precacheNeighbors(int index) async {
     final targets = <int>{
@@ -368,19 +434,43 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
 
   void _goToPage(int logicalPage) {
     if (_pageCount == 0) return;
-    if (logicalPage < 0 || logicalPage >= _pageCount) {
-      _notifyTrialLimit(
-        ReaderTrialLimitAction.seek,
-        logicalPage < 0 ? _window.start - 1 : _window.start + _window.visible,
-      );
+    if (logicalPage >= _pageCount) {
+      // Only a real paywall when more content exists beyond the window;
+      // otherwise this is just the end of the chapter.
+      if (_hasMoreBeyondTrial) {
+        _requestTrialBoundary(next: true);
+      } else if (_chapterGesture.allow) {
+        widget.onNextChapterRequested?.call();
+      }
+    } else if (logicalPage < 0 && _window.start > 0) {
+      _requestTrialBoundary(next: false);
     }
     final target = logicalPage.clamp(0, _pageCount - 1);
-    if (_pageController?.hasClients ?? false) {
+    if (_mode == ComicReadingMode.webtoon) {
+      _webtoon.jumpToIndex(target);
+    } else if (_pageController?.hasClients ?? false) {
       _pageController!.jumpToPage(target);
     }
+    if (target == _currentPage) return;
     setState(() => _currentPage = target);
     widget.onPageChanged?.call(_contentPageIndex(target));
+    _recordVisit();
     _saveProgress();
+  }
+
+  /// Debounced trial event for leaving the window (end: next, start: seek).
+  void _requestTrialBoundary({required bool next}) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive || _pageCount == 0) return;
+    final edge = next ? _window.start + _window.visible : _window.start - 1;
+    _trialGesture.call(
+      widget.onTrialLimitReached,
+      limit: limit,
+      currentIndex: _currentRawIndex,
+      targetIndex: edge,
+      totalCount: widget.pages.length,
+      action: next ? ReaderTrialLimitAction.next : ReaderTrialLimitAction.seek,
+    );
   }
 
   void _goToContent(int raw) {
@@ -406,6 +496,10 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
     final raw = _rawIndex(logicalIndex);
     if (_doublePageActive && _window.readable(raw + 1)) {
       return Row(
+        // Right-to-left comics put the first page of a spread on the right.
+        textDirection: widget.rtl && _mode == ComicReadingMode.horizontal
+            ? TextDirection.rtl
+            : TextDirection.ltr,
         children: [
           Expanded(child: _image(raw)),
           Expanded(child: _image(raw + 1)),
@@ -450,12 +544,13 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '图片加载失败',
+                    _strings.imageLoadFailed,
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
                   IconButton(
+                    tooltip: _strings.retry,
                     icon: const Icon(Icons.refresh),
                     onPressed: state.reLoadImage,
                   ),
@@ -470,24 +565,42 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleBookmark() async {
-    final existing = _bookmarks.where((b) => b.pageIndex == _currentRawIndex);
-    if (existing.isNotEmpty) {
-      await ReaderBookmarkStore.instance.removeBookmark(
-        _bookId,
-        existing.first.id,
-      );
-    } else {
-      await ReaderBookmarkStore.instance.addBookmark(
-        ReaderBookmark(
-          id: readerRecordId(),
-          bookId: _bookId,
-          title: 'Page ${_currentRawIndex + 1}',
-          pageIndex: _currentRawIndex,
-        ),
-      );
+    if (_bookmarkBusy) return;
+    _bookmarkBusy = true;
+    try {
+      final existing = _bookmarks.where((b) => b.pageIndex == _currentRawIndex);
+      if (existing.isNotEmpty) {
+        await ReaderBookmarkStore.instance.removeBookmark(
+          _bookId,
+          existing.first.id,
+        );
+      } else {
+        // No language-specific title is stored; the list derives it from the
+        // page index at display time.
+        await ReaderBookmarkStore.instance.addBookmark(
+          ReaderBookmark(
+            id: readerRecordId(),
+            bookId: _bookId,
+            title: '',
+            pageIndex: _currentRawIndex,
+          ),
+        );
+      }
+      _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+      if (mounted) setState(() {});
+    } finally {
+      _bookmarkBusy = false;
     }
-    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-    if (mounted) setState(() {});
+  }
+
+  /// Bookmarks created by older versions stored an English "Page N" title.
+  String _bookmarkLabel(ReaderBookmark b) {
+    final index = b.pageIndex;
+    final legacy = RegExp(r'^Page \d+$').hasMatch(b.title);
+    if (index != null && (b.title.isEmpty || legacy)) {
+      return _strings.pageN(index + 1);
+    }
+    return b.title;
   }
 
   Future<void> _showBookmarks() async {
@@ -496,15 +609,16 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
       builder: (context) {
         return ListView(
           children: [
-            const ListTile(title: Text('书签')),
+            ListTile(title: Text(_strings.bookmarks)),
             for (final b in _bookmarks)
               ListTile(
-                title: Text(b.title),
+                title: Text(_bookmarkLabel(b)),
                 onTap: () {
                   Navigator.pop(context);
                   if (b.pageIndex != null) _goToContent(b.pageIndex!);
                 },
                 trailing: IconButton(
+                  tooltip: _strings.delete,
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
                     await ReaderBookmarkStore.instance.removeBookmark(
@@ -541,12 +655,21 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
             itemCount: _window.visible,
             itemBuilder: (context, i) {
               final index = _window.start + i;
-              return GestureDetector(
-                onTap: () {
-                  Navigator.pop(context);
-                  _goToContent(index);
-                },
-                child: Image(image: _providerAt(index), fit: BoxFit.cover),
+              return Semantics(
+                button: true,
+                label: _strings.pageN(index + 1),
+                child: GestureDetector(
+                  excludeFromSemantics: true,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _goToContent(index);
+                  },
+                  child: Image(
+                    image: _providerAt(index),
+                    fit: BoxFit.cover,
+                    excludeFromSemantics: true,
+                  ),
+                ),
               );
             },
           ),
@@ -556,18 +679,27 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.audioVolumeUp ||
+    final volume =
+        _settings.volumeKeyPaging &&
+        (key == LogicalKeyboardKey.audioVolumeUp ||
+            key == LogicalKeyboardKey.audioVolumeDown);
+    // Swallow key repeats of the volume keys too, otherwise holding the key
+    // would change the system volume.
+    if (event is KeyRepeatEvent && volume) return KeyEventResult.handled;
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // Only horizontal reading is mirrored for RTL; vertical/webtoon scroll.
+    final reverse = widget.rtl && _mode == ComicReadingMode.horizontal;
+    if ((volume && key == LogicalKeyboardKey.audioVolumeUp) ||
         key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.pageDown) {
-      _goToPage(_currentPage + (widget.rtl ? -1 : 1));
+      _goToPage(_currentPage + (reverse ? -1 : 1));
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.audioVolumeDown ||
+    if ((volume && key == LogicalKeyboardKey.audioVolumeDown) ||
         key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.pageUp) {
-      _goToPage(_currentPage + (widget.rtl ? 1 : -1));
+      _goToPage(_currentPage + (reverse ? 1 : -1));
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -578,9 +710,11 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
     if (_loading && _error == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) return Center(child: Text('Load failed: $_error'));
+    if (_error != null) {
+      return Center(child: Text('${_strings.loadFailed}: $_error'));
+    }
     if (widget.pages.length == 0 || _window.visible == 0) {
-      return const Center(child: Text('No readable content'));
+      return Center(child: Text(_strings.noReadableContent));
     }
     final controller = _pageController;
     if (controller == null) {
@@ -600,73 +734,150 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTapUp: (_) {
-                    if (widget.showToolbar) {
-                      setState(() => _toolbarVisible = !_toolbarVisible);
-                    }
-                  },
-                  child: ExtendedImageGesturePageView.builder(
-                    key: ValueKey(
-                      '${_mode.name}-${_settings.doublePage}-$_pageViewCount',
-                    ),
-                    itemCount: _pageViewCount,
-                    controller: controller,
-                    scrollDirection: _mode == ComicReadingMode.vertical
-                        ? Axis.vertical
-                        : Axis.horizontal,
-                    reverse: widget.rtl && _mode == ComicReadingMode.horizontal,
-                    onPageChanged: (index) {
-                      if (isTrialNextSentinel(
-                        index: index,
-                        readableCount: _pageCount,
-                        hasMoreBeyond: _hasMoreBeyondTrial,
-                      )) {
-                        _onTrialNextSentinel();
-                        return;
+                Semantics(
+                  button: widget.showToolbar,
+                  label: _strings.toggleToolbar,
+                  onTap: widget.showToolbar
+                      ? () => setState(() => _toolbarVisible = !_toolbarVisible)
+                      : null,
+                  child: GestureDetector(
+                    excludeFromSemantics: true,
+                    behavior: HitTestBehavior.translucent,
+                    onTapUp: (_) {
+                      if (widget.showToolbar) {
+                        setState(() => _toolbarVisible = !_toolbarVisible);
                       }
-                      _currentPage = index;
-                      widget.onPageChanged?.call(_contentPageIndex(index));
-                      _precacheNeighbors(index);
-                      _saveProgress();
-                      if (mounted) setState(() {});
                     },
-                    itemBuilder: (context, index) {
-                      if (isTrialNextSentinel(
-                        index: index,
-                        readableCount: _pageCount,
-                        hasMoreBeyond: _hasMoreBeyondTrial,
-                      )) {
-                        return const SizedBox.expand();
-                      }
-                      final page = _buildPage(index);
-                      if (widget.pageTurnEffect == PageTurnEffect.none ||
-                          _mode == ComicReadingMode.vertical) {
-                        return page;
-                      }
-                      return AnimatedBuilder(
-                        animation: controller,
-                        child: page,
-                        builder: (context, child) {
-                          final offset =
-                              controller.hasClients &&
-                                  controller.position.hasContentDimensions
-                              ? ((controller.page ??
-                                            controller.initialPage.toDouble()) -
-                                        index)
-                                    .clamp(-1.0, 1.0)
-                              : 0.0;
-                          return PageCurl(
-                            progress: offset.abs(),
-                            hinge: offset < 0
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: child!,
-                          );
-                        },
-                      );
-                    },
+                    child: _mode == ComicReadingMode.webtoon
+                        ? ComicWebtoonView(
+                            key: ValueKey('webtoon-$_bookId'),
+                            count: _window.visible,
+                            initialIndex: _currentPage,
+                            controller: _webtoon,
+                            onReachedEnd: () {
+                              if (_hasMoreBeyondTrial) {
+                                _requestTrialBoundary(next: true);
+                              } else if (_chapterGesture.allow) {
+                                widget.onNextChapterRequested?.call();
+                              }
+                            },
+                            onReachedStart: () {
+                              if (_window.start > 0) {
+                                _requestTrialBoundary(next: false);
+                              }
+                            },
+                            itemBuilder: (i) {
+                              final placeholder = comicWebtoonPlaceholderHeight(
+                                context,
+                              );
+                              return Image(
+                                image: _providerAt(_rawIndex(i)),
+                                width: double.infinity,
+                                fit: BoxFit.fitWidth,
+                                // Reserve space until the first frame so the
+                                // lazy list does not decode every page at once.
+                                frameBuilder: (context, child, frame, sync) =>
+                                    frame == null && !sync
+                                    ? SizedBox(
+                                        height: placeholder,
+                                        child: const Center(
+                                          child: CircularProgressIndicator(),
+                                        ),
+                                      )
+                                    : child,
+                                errorBuilder: (context, error, stack) =>
+                                    SizedBox(
+                                      height: placeholder / 2,
+                                      child: Center(
+                                        child: Text(
+                                          _strings.imageLoadFailed,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                              );
+                            },
+                            onIndexChanged: (i) {
+                              if (i == _currentPage) return;
+                              _currentPage = i;
+                              widget.onPageChanged?.call(_contentPageIndex(i));
+                              _recordVisit();
+                              _saveProgress();
+                              if (mounted) setState(() {});
+                            },
+                          )
+                        : ExtendedImageGesturePageView.builder(
+                            key: ValueKey(
+                              '${_mode.name}-${_settings.doublePage}-$_pageViewCount',
+                            ),
+                            itemCount: _pageViewCount,
+                            controller: controller,
+                            scrollDirection: _mode == ComicReadingMode.vertical
+                                ? Axis.vertical
+                                : Axis.horizontal,
+                            reverse:
+                                widget.rtl &&
+                                _mode == ComicReadingMode.horizontal,
+                            onPageChanged: (index) {
+                              if (isTrialNextSentinel(
+                                index: index,
+                                readableCount: _pageCount,
+                                hasMoreBeyond: _hasMoreBeyondTrial,
+                              )) {
+                                _onTrialNextSentinel();
+                                return;
+                              }
+                              _currentPage = index;
+                              widget.onPageChanged?.call(
+                                _contentPageIndex(index),
+                              );
+                              _recordVisit();
+                              _precacheNeighbors(index);
+                              _saveProgress();
+                              if (mounted) setState(() {});
+                            },
+                            itemBuilder: (context, index) {
+                              if (isTrialNextSentinel(
+                                index: index,
+                                readableCount: _pageCount,
+                                hasMoreBeyond: _hasMoreBeyondTrial,
+                              )) {
+                                return const SizedBox.expand();
+                              }
+                              final page = _buildPage(index);
+                              if (widget.pageTurnEffect ==
+                                      PageTurnEffect.none ||
+                                  _mode == ComicReadingMode.vertical) {
+                                return page;
+                              }
+                              return AnimatedBuilder(
+                                animation: controller,
+                                child: page,
+                                builder: (context, child) {
+                                  final offset =
+                                      controller.hasClients &&
+                                          controller
+                                              .position
+                                              .hasContentDimensions
+                                      ? ((controller.page ??
+                                                    controller.initialPage
+                                                        .toDouble()) -
+                                                index)
+                                            .clamp(-1.0, 1.0)
+                                      : 0.0;
+                                  return PageCurl(
+                                    progress: offset.abs(),
+                                    hinge: offset < 0
+                                        ? Alignment.centerRight
+                                        : Alignment.centerLeft,
+                                    child: child!,
+                                  );
+                                },
+                              );
+                            },
+                          ),
                   ),
                 ),
                 BrightnessOverlay(
@@ -680,16 +891,21 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
                   bookId: _bookId,
                   location: '$_currentRawIndex',
                   enabled: widget.enableInk,
+                  strings: _strings,
                 ),
                 if (!_toolbarVisible)
                   ReaderProgressBar(
+                    semanticsLabel: _strings.progress,
                     progress: progress,
                     onSeek: (v) => _goToPage((v * (_pageCount - 1)).round()),
                   ),
                 if (widget.showToolbar && _toolbarVisible)
                   PageReaderToolbar(
-                    pageLabel:
-                        '${_contentPageIndex(_currentPage) + 1} / $_fullPageCount',
+                    showAutoCrop: true,
+                    strings: _strings,
+                    allowWebtoon: true,
+                    currentPage: _contentPageIndex(_currentPage) + 1,
+                    totalPages: _fullPageCount,
                     progress: progress,
                     settings: _settings,
                     mode: _mode,

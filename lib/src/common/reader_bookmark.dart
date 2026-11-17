@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:synchronized/synchronized.dart';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import 'reader_kv.dart';
 
 /// A bookmark for comic page or novel location.
 class ReaderBookmark {
@@ -112,8 +112,7 @@ class ReaderBookmarkStore {
   static const _hlPrefix = 'phantasm_highlights_';
 
   Future<List<ReaderBookmark>> listBookmarks(String bookId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$_bmPrefix$bookId');
+    final raw = await ReaderKv.getString('$_bmPrefix$bookId');
     if (raw == null) return const [];
     try {
       final list = jsonDecode(raw) as List;
@@ -126,9 +125,12 @@ class ReaderBookmarkStore {
     }
   }
 
-  Future<void> saveBookmarks(String bookId, List<ReaderBookmark> items) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+  /// Replaces all bookmarks of [bookId] (serialized with other writes).
+  Future<void> saveBookmarks(String bookId, List<ReaderBookmark> items) =>
+      _lock.synchronized(() => _saveBookmarks(bookId, items));
+
+  Future<void> _saveBookmarks(String bookId, List<ReaderBookmark> items) async {
+    await ReaderKv.setString(
       '$_bmPrefix$bookId',
       jsonEncode(items.map((e) => e.toJson()).toList()),
     );
@@ -137,18 +139,17 @@ class ReaderBookmarkStore {
   Future<void> addBookmark(ReaderBookmark bookmark) =>
       _lock.synchronized(() async {
         final list = [...await listBookmarks(bookmark.bookId), bookmark];
-        await saveBookmarks(bookmark.bookId, list);
+        await _saveBookmarks(bookmark.bookId, list);
       });
 
   Future<void> removeBookmark(String bookId, String id) =>
       _lock.synchronized(() async {
         final list = await listBookmarks(bookId);
-        await saveBookmarks(bookId, list.where((e) => e.id != id).toList());
+        await _saveBookmarks(bookId, list.where((e) => e.id != id).toList());
       });
 
   Future<List<ReaderHighlight>> listHighlights(String bookId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$_hlPrefix$bookId');
+    final raw = await ReaderKv.getString('$_hlPrefix$bookId');
     if (raw == null) return const [];
     try {
       final list = jsonDecode(raw) as List;
@@ -161,12 +162,15 @@ class ReaderBookmarkStore {
     }
   }
 
-  Future<void> saveHighlights(
+  /// Replaces all highlights of [bookId] (serialized with other writes).
+  Future<void> saveHighlights(String bookId, List<ReaderHighlight> items) =>
+      _lock.synchronized(() => _saveHighlights(bookId, items));
+
+  Future<void> _saveHighlights(
     String bookId,
     List<ReaderHighlight> items,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    await ReaderKv.setString(
       '$_hlPrefix$bookId',
       jsonEncode(items.map((e) => e.toJson()).toList()),
     );
@@ -175,13 +179,35 @@ class ReaderBookmarkStore {
   Future<void> addHighlight(ReaderHighlight highlight) =>
       _lock.synchronized(() async {
         final list = [...await listHighlights(highlight.bookId), highlight];
-        await saveHighlights(highlight.bookId, list);
+        await _saveHighlights(highlight.bookId, list);
+      });
+
+  /// Sets or clears the note text attached to a highlight.
+  Future<void> updateHighlightNote(String bookId, String id, String? note) =>
+      _lock.synchronized(() async {
+        final list = await listHighlights(bookId);
+        await _saveHighlights(bookId, [
+          for (final h in list)
+            if (h.id == id)
+              ReaderHighlight(
+                id: h.id,
+                bookId: h.bookId,
+                excerpt: h.excerpt,
+                cfi: h.cfi,
+                paragraphIndex: h.paragraphIndex,
+                color: h.color,
+                note: (note == null || note.isEmpty) ? null : note,
+                createdAt: h.createdAt,
+              )
+            else
+              h,
+        ]);
       });
 
   Future<void> removeHighlight(String bookId, String id) =>
       _lock.synchronized(() async {
         final list = await listHighlights(bookId);
-        await saveHighlights(bookId, list.where((e) => e.id != id).toList());
+        await _saveHighlights(bookId, list.where((e) => e.id != id).toList());
       });
 
   /// Copies known legacy records without removing the original keys.
@@ -190,7 +216,7 @@ class ReaderBookmarkStore {
         final oldBookmarks = await listBookmarks(oldBookId);
         final oldHighlights = await listHighlights(oldBookId);
         if ((await listBookmarks(newBookId)).isEmpty) {
-          await saveBookmarks(
+          await _saveBookmarks(
             newBookId,
             oldBookmarks
                 .map(
@@ -203,7 +229,7 @@ class ReaderBookmarkStore {
           );
         }
         if ((await listHighlights(newBookId)).isEmpty) {
-          await saveHighlights(
+          await _saveHighlights(
             newBookId,
             oldHighlights
                 .map(

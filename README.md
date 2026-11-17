@@ -4,7 +4,7 @@
 
 # phantasm_read
 
-Cross-platform Flutter comic / novel / PDF reader package (`0.0.8`).
+Cross-platform Flutter comic / novel / PDF reader package (`0.0.9`).
 
 [中文文档](README_zh.md)
 
@@ -12,8 +12,10 @@ Cross-platform Flutter comic / novel / PDF reader package (`0.0.8`).
 
 ```yaml
 dependencies:
-  phantasm_read: ^0.0.8
+  phantasm_read: ^0.0.9
 ```
+
+Host prerequisites: wrap your `MaterialApp` content in `MaterialUiCompatibilityBridge` (from `material_ui`) when you mix it with Material widgets, and make sure `audioplayers` can run on your target platforms (media overlay / audiobook). The reader resolves its UI language from the ambient `Locale` (`strings` defaults to `ReaderStrings.auto`); pass `ReaderStrings.zh` etc. to pin a language.
 
 License: [MIT](LICENSE)
 
@@ -367,19 +369,31 @@ Notes:
 
 | Item | Status |
 |------|--------|
-| `ComicReader.pageTurnEffect` | Declared; comic path still uses `ExtendedImageGesturePageView` — use `CurlPageView` yourself |
+| `ComicReader.pageTurnEffect` | Applied to horizontal paging via `PageCurl`; vertical and webtoon modes scroll without curl |
 | Comic double-page | Horizontal only; enabling double-page auto-switches from vertical |
 | EPUB trial | Chapter-level blocking + callbacks; in-book paging may need host handling at deep jumps |
-| EPUB TTS | Text path speaks current paragraph; EPUB does not read body text |
+| TTS | Text path speaks the current paragraph, EPUB the visible page text; long text is read in chunks. Set `NovelReader.ttsLanguage` (engine must implement `NovelTtsLanguageAware`) or rely on the EPUB `dc:language` |
 | Auto-scroll | Text path only |
 | Media overlay → EPUB | Karaoke jumps by paragraph, not CFI |
 | Novel bookmark/highlight list UI | Persist yes; no list sheet (comic has bookmark list) |
-| Ink | Drawable via `enableInk`; no toolbar undo/clear; not persisted by default |
+| Ink | `enableInk`; toolbar undo/clear; saved per book and location (`ReaderInk`) |
 | Large PDFs | Page rasterization; high page count / `rasterDpi` increases memory and load time |
 | Android PDF | System `PdfRenderer` requires **PDF 1.7+**, unencrypted; older/hand-written PDFs may fail |
 | Markdown / HTML URL | No `*Url` factories (file / asset only) |
 | Local file paths | May `UnsupportedError` on web — prefer asset / url / bytes |
 | `onSync` | Host hook only; no cloud upload inside the package |
+| Screenshot protection | Not provided (by design) |
+| MOBI/AZW3/FB2/CBR/RAR | Not built in; see [docs/format_feasibility.md](docs/format_feasibility.md) |
+| `ChineseTextConverter` | Character-level only, 63 common characters, no phrase conversion |
+| Webtoon mode | `ComicReadingMode.webtoon` (`ComicWebtoonView`); the orientation button cycles vertical / horizontal / webtoon |
+| Auto-crop | `ReaderSettings.comicAutoCrop` (off by default); trims uniform margins up to 20% per side on readable pages only, cached by `ImageCache` |
+| Custom fonts | `NovelReader.customFonts`: `FontLoader` for text, `@font-face` for EPUB. Registering another font under the same family name is ignored for text (Flutter cannot unload fonts) |
+| Volume keys | `ReaderSettings.volumeKeyPaging` works where the platform delivers volume keys to Flutter (Android hardware keys while the reader has focus); key repeats are swallowed |
+| Web text encodings | Without `charset_converter` on Web, GBK/Big5/Shift_JIS decoding uses the platform `TextDecoder`; verify exotic encodings in your target browsers |
+| Bookmark titles | Stored empty and derived at display time (`Page N` / `Paragraph N` in the current language); legacy `Page N` titles are localised on read |
+| Sync | `ReaderSyncHub` serializes emissions and swallows host errors (observe with `onError`); the package never merges remote data (`ReaderSyncConflictPolicy` is advisory) |
+| UI strings | Toolbar, ink buttons, search and typography panel use `ReaderStrings`. `strings` defaults to `ReaderStrings.auto` (follows the ambient `Locale`). Presets: `zh`, `zhHant`, `en`, `th`, `vi`, `id`, `ms`, `fil`; pick with `ReaderStrings.forLocale(Locale)` / `forLanguageCode('th')` (aliases `in`, `tl`; unknown languages fall back to `en`). Pass the result to `strings:` on `ComicReader` / `NovelReader` / `PdfReader` |
+| Trial limits | Enforced client-side only; the host passes full content, so real paywalls must serve only the trial range from the server |
 
 ---
 
@@ -417,6 +431,6 @@ See [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_zh.md](CHANGELOG_zh.md).
 
 Provide a stable `bookId` when available. Default IDs now derive from source/content SHA-256. Comic/PDF initial pages, progress and bookmarks use zero-based absolute content pages, independent of spreads. Legacy comic positions with an explicit bookId migrate using the current layout. Old default hashCode IDs cannot be reliably mapped back to books; original keys are retained and can be copied with `ReaderProgressStore.instance.migrate(oldId, newId)` and `ReaderBookmarkStore.instance.migrate(oldId, newId)`.
 
-`NovelTypography.copyWith(fontFamily: null)` restores the system font; omitting the argument preserves the existing font. Legacy tap-zone/trial helpers remain deprecated compatibility APIs. A nonpositive trial maxCount continues to mean unlimited.
+`NovelTypography.copyWith(fontFamily: null)` restores the system font; omitting the argument preserves the existing font. Legacy tap-zone/trial helpers remain deprecated compatibility APIs. A nonpositive trial maxCount continues to mean unlimited, so hosts must validate the value before constructing `ReaderTrialLimit` (a computed 0 would disable the paywall). Trial limits are enforced on the client only: any full content passed to the reader (image bytes, whole EPUB/PDF) can be extracted, so real paywall protection requires the server to deliver only the trial range.
 
-PDF counts pages with tiny 8 DPI rasters and renders full pages on demand, using a 32 MiB raster cache and 24 DPI thumbnails. Page counting still takes time for large documents. `ComicArchive.fromBytesAsync` decodes on a worker isolate; archive limits are 64 MiB compressed, 256 MiB uncompressed images and 5000 pages. Ink is saved per book/location with normalized coordinates, undo and clear. EPUB book scripts and external navigation are disabled; preview restrictions apply to navigation, search and rendered chapter content.
+PDF counts pages with tiny 8 DPI rasters and renders full pages on demand, using a 32 MiB raster cache (at most two concurrent rasterisations) and 24 DPI thumbnails. Page counting still takes time for large documents and happens before the first page is shown; encrypted PDFs show a localised hint. URL sources time out after 60 s and are limited to 300 MiB. `ComicArchive.fromBytesAsync` decodes on a worker isolate; archive limits are 64 MiB compressed, 256 MiB uncompressed images and 5000 pages. Ink is saved per book/location with normalized coordinates, undo and clear. EPUB book scripts and external navigation are disabled; preview restrictions apply to navigation, search and rendered chapter content.

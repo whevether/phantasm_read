@@ -2,11 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 
 /// How the example app reacts when [onTrialLimitReached] fires.
-enum ExampleTrialFeedback {
-  dialog,
-  snackbar,
-  none,
-}
+enum ExampleTrialFeedback { dialog, snackbar, none }
 
 String trialLimitMessage(ReaderTrialLimitEvent event) {
   final limit = event.limit;

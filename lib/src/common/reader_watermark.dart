@@ -2,11 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 /// Semi-transparent watermark overlay for trial / DRM-style marking.
 class ReaderWatermark extends StatelessWidget {
-  const ReaderWatermark({
-    super.key,
-    required this.text,
-    this.opacity = 0.12,
-  });
+  const ReaderWatermark({super.key, required this.text, this.opacity = 0.12});
 
   final String text;
   final double opacity;
@@ -18,9 +14,7 @@ class ReaderWatermark extends StatelessWidget {
       child: IgnorePointer(
         child: Opacity(
           opacity: opacity.clamp(0.0, 1.0),
-          child: CustomPaint(
-            painter: _WatermarkPainter(text),
-          ),
+          child: CustomPaint(painter: _WatermarkPainter(text)),
         ),
       ),
     );

@@ -145,11 +145,7 @@ class _CurlPageViewState extends State<CurlPageView> {
       final back = index + 1 < widget.itemCount
           ? widget.itemBuilder(context, index + 1)
           : null;
-      return PageCurl(
-        progress: t,
-        backChild: back,
-        child: child,
-      );
+      return PageCurl(progress: t, backChild: back, child: child);
     }
 
     // Turning backward: page [index] curls right, reveals index - 1.

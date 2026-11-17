@@ -1,0 +1,30 @@
+# Files that must not be published to pub.dev (in addition to .gitignore).
+# NOTE: .pubignore replaces .gitignore for `dart pub publish`, so repeat the
+# ignored build outputs here.
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+/coverage/
+.cursor/
+.DS_Store
+
+# Android signing secrets
+key.properties
+*.jks
+*.keystore
+
+# Example app binaries/build output
+example/build/
+example/.dart_tool/
+example/android/.gradle/
+example/android/local.properties
+example/android/key.properties
+example/jks/
+
+# Large test helpers that are not needed by package users
+test/js/node_modules/
+/pubspec.lock
+**/doc/api/
+*.class
+*.log
+*.swp

@@ -28,7 +28,8 @@ class NovelChapter {
   }
 
   factory NovelChapter.fromJson(Map<String, dynamic> json) {
-    final kids = (json['children'] as List?)
+    final kids =
+        (json['children'] as List?)
             ?.whereType<Map>()
             .map((e) => NovelChapter.fromJson(Map<String, dynamic>.from(e)))
             .toList() ??

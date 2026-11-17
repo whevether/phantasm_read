@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:phantasm_read/src/common/reader_kv.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 import 'package:phantasm_read/src/novel/text/text_reader.dart';
@@ -19,7 +19,7 @@ Future<void> settle(WidgetTester tester) async {
 }
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(ReaderKv.useMemoryForTesting);
   testWidgets(
     'Reflow preserves position inside a long paragraph and separates fragment anchors',
     (tester) async {

@@ -1,7 +1,15 @@
 name: phantasm_read
-description: Cross-platform Flutter comic and novel reader package.
-version: 0.0.8
+description: Cross-platform Flutter reader for comics (CBZ, webtoon), novels (EPUB, txt, md, html) and PDF, with trial limits, bookmarks, TTS and Southeast Asian UI languages.
+version: 0.0.9
 homepage: https://github.com/whevether/phantasm_read
+repository: https://github.com/whevether/phantasm_read
+issue_tracker: https://github.com/whevether/phantasm_read/issues
+topics:
+  - reader
+  - epub
+  - comic
+  - pdf
+  - ebook
 license: MIT
 
 environment:
@@ -11,25 +19,26 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  material_ui: ^1.7.0
-  extended_image: 10.1.0
-  webview_flutter: 4.14.1
-  screen_brightness: 2.1.11
-  wakelock_plus: 1.8.1
-  charset_converter: 2.5.1
-  shared_preferences: 2.5.6
-  archive: 4.5.2
-  synchronized: 3.5.0
-  crypto: 3.0.7
-  characters: 1.4.1
-  http: 1.6.0
+  material_ui: ^1.11.1
+  extended_image: ^10.1.0
+  webview_flutter: ^4.14.1
+  screen_brightness: ^2.1.11
+  wakelock_plus: ^1.8.2
+  charset_converter: ^2.5.1
+  archive: ^4.7.1
+  synchronized: ^3.6.1
+  crypto: ^3.0.8
+  characters: ^1.4.1
+  http: ^1.6.0
   path_provider: ^2.1.6
-  audioplayers: 6.8.1
-  printing: 5.15.1
+  audioplayers: ^6.8.1
+  printing: ^5.15.1
+  unorm_dart: ^0.3.2
+  tostore: ^3.6.2
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: 6.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   assets:

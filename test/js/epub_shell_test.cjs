@@ -132,10 +132,54 @@ async function fixture() {
       ),
     );
     await page.evaluate(() => window.epubBridge.setFontFamily(null));
+
+    // Chunked upload (large books) opens the same book as the one-shot path.
+    await page.evaluate(() => window.epubBridge.beginUpload());
+    for (let at = 0; at < base64.length; at += 4096) {
+      await page.evaluate(
+        (chunk) => window.epubBridge.appendChunk(chunk),
+        base64.slice(at, at + 4096),
+      );
+    }
+    await page.evaluate(() =>
+      window.epubBridge.openFromBase64(null, "paginated", null, null, null),
+    );
+    assert.equal(
+      (await page.evaluate(() => window.epubBridge.getToc())).length,
+      3,
+    );
+    assert.equal(await page.evaluate(() => window.epubBridge.getLanguage()), "en");
+
+    // Dead links and missing anchors warn but never raise an error.
+    const before = await page.evaluate(() => window.messages.length);
+    await page.evaluate(() => window.epubBridge.display("missing.xhtml").catch(() => {}));
+    await page.evaluate(() => window.epubBridge.display("c2.xhtml#no-such-anchor").catch(() => {}));
+    const fresh = await page.evaluate(
+      (n) => window.messages.slice(n).map((m) => m.type),
+      before,
+    );
+    assert.ok(!fresh.includes("error"), `unexpected error message: ${fresh}`);
+
+    // Several custom fonts coexist (one stylesheet, one @font-face per family).
+    const tiny = "AAEAAAAKAIAAAwAgT1MvMg==";
+    await page.evaluate((b) => window.epubBridge.addFontFace("Alpha", b, "font/ttf"), tiny);
+    await page.evaluate((b) => window.epubBridge.addFontFace("Beta", b, "font/otf"), tiny);
+    await assert.rejects(
+      page.evaluate(() => window.epubBridge.addFontFace("Bad", "not base64!", "font/ttf")),
+    );
+    const css = await page.frames()[1].evaluate(() => {
+      const el = document.querySelector('style[id*="phantasm-fonts"]');
+      return el ? el.textContent : "";
+    });
+    assert.ok(css.includes("Alpha") && css.includes("Beta"), `fonts css: ${css}`);
+    assert.ok(!css.includes("Bad"));
+
+    // Forcing RTL must not break rendering.
+    await page.evaluate(() => window.epubBridge.setDirection("rtl"));
     await page.evaluate(() => window.epubBridge.close());
     assert.deepEqual(errors, []);
     console.log(
-      "EPUB browser tests passed: real ZIP parsing, nested TOC, search, async replies, script isolation, chapter/anchor trial clipping, flow and font reset.",
+      "EPUB browser tests passed: real ZIP parsing, nested TOC, search, async replies, script isolation, chapter/anchor trial clipping, flow and font reset, chunked upload, language, dead links, multiple fonts and RTL.",
     );
   } finally {
     await browser.close();

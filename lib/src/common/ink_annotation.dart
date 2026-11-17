@@ -1,9 +1,11 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:synchronized/synchronized.dart';
 
 import 'package:material_ui/material_ui.dart';
+
+import 'reader_kv.dart';
+import 'reader_strings.dart';
 
 /// A freehand ink stroke for annotations.
 class InkStroke {
@@ -84,12 +86,12 @@ class InkAnnotationLayerState extends State<InkAnnotationLayer> {
   void undo() {
     if (_strokes.isEmpty) return;
     setState(() => _strokes = _strokes.sublist(0, _strokes.length - 1));
-    widget.onChanged?.call(_strokes);
+    widget.onChanged?.call(List.unmodifiable(_strokes));
   }
 
   void clear() {
     setState(() => _strokes = []);
-    widget.onChanged?.call(_strokes);
+    widget.onChanged?.call(const []);
   }
 
   @override
@@ -112,7 +114,9 @@ class InkAnnotationLayerState extends State<InkAnnotationLayer> {
               setState(() {});
             },
             onPanEnd: (_) {
-              if (_current.length >= 2) {
+              if (_current.length >= 2 &&
+                  _canvasSize.width > 0 &&
+                  _canvasSize.height > 0) {
                 _strokes = [
                   ..._strokes,
                   InkStroke(
@@ -129,7 +133,7 @@ class InkAnnotationLayerState extends State<InkAnnotationLayer> {
                     width: widget.strokeWidth,
                   ),
                 ];
-                widget.onChanged?.call(_strokes);
+                widget.onChanged?.call(List.unmodifiable(_strokes));
               }
               _current.clear();
               setState(() {});
@@ -217,9 +221,7 @@ class ReaderInkStore {
   Future<List<InkStroke>> load(String bookId, String location) =>
       _writes.synchronized(() async {
         try {
-          final raw = (await SharedPreferences.getInstance()).getString(
-            _key(bookId, location),
-          );
+          final raw = await ReaderKv.getString(_key(bookId, location));
           if (raw == null) return <InkStroke>[];
           return (jsonDecode(raw) as List)
               .map(
@@ -232,26 +234,22 @@ class ReaderInkStore {
       });
   Future<void> save(String bookId, String location, List<InkStroke> strokes) {
     final raw = jsonEncode(strokes.map((s) => s.toJson()).toList());
-    return _writes.synchronized(() async {
-      await (await SharedPreferences.getInstance()).setString(
-        _key(bookId, location),
-        raw,
-      );
-    });
+    return _writes.synchronized(
+      () => ReaderKv.setString(_key(bookId, location), raw),
+    );
   }
 
   Future<Map<String, dynamic>> exportJson(String bookId) =>
       _writes.synchronized(() async {
-        final prefs = await SharedPreferences.getInstance();
         final result = <String, dynamic>{};
-        for (final key in prefs.getKeys().where(
-          (k) => k.startsWith('phantasm_ink_'),
-        )) {
+        for (final key in await ReaderKv.keys('phantasm_ink_')) {
           try {
             final pair =
                 jsonDecode(key.substring('phantasm_ink_'.length)) as List;
             if (pair.length == 2 && pair[0] == bookId) {
-              result[pair[1] as String] = jsonDecode(prefs.getString(key)!);
+              result[pair[1] as String] = jsonDecode(
+                (await ReaderKv.getString(key))!,
+              );
             }
           } catch (_) {
             /* Leave unrelated or invalid legacy keys unchanged. */
@@ -268,10 +266,12 @@ class ReaderInk extends StatefulWidget {
     required this.bookId,
     required this.location,
     required this.enabled,
+    this.strings = ReaderStrings.auto,
   });
   final String bookId;
   final String location;
   final bool enabled;
+  final ReaderStrings strings;
   @override
   State<ReaderInk> createState() => _ReaderInkState();
 }
@@ -313,12 +313,20 @@ class _ReaderInkState extends State<ReaderInk> {
   }
 
   void _save(List<InkStroke> strokes) {
-    ReaderInkStore.instance.save(widget.bookId, widget.location, strokes);
+    // Keep the in-memory copy in sync: when ink is disabled and enabled again
+    // the layer is rebuilt from `_strokes`, which must not be stale.
+    _strokes = List.of(strokes);
+    ReaderInkStore.instance
+        .save(widget.bookId, widget.location, strokes)
+        .catchError((Object _) {});
   }
 
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled || !_ready) return const SizedBox.shrink();
+    final strings = widget.strings.resolveFor(
+      Localizations.maybeLocaleOf(context),
+    );
     return Positioned.fill(
       child: Stack(
         children: [
@@ -328,20 +336,20 @@ class _ReaderInkState extends State<ReaderInk> {
             initialStrokes: _strokes,
             onChanged: _save,
           ),
-          Positioned(
+          PositionedDirectional(
             top: 24,
-            right: 12,
+            end: 12,
             child: Material(
               color: Colors.black54,
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: '撤销笔迹',
+                    tooltip: strings.undoInk,
                     onPressed: () => _layer.currentState?.undo(),
                     icon: const Icon(Icons.undo, color: Colors.white),
                   ),
                   IconButton(
-                    tooltip: '清空笔迹',
+                    tooltip: strings.clearInk,
                     onPressed: () => _layer.currentState?.clear(),
                     icon: const Icon(Icons.delete_outline, color: Colors.white),
                   ),

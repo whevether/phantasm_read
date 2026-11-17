@@ -6,6 +6,7 @@ import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
 import '../../common/page_curl.dart';
 import '../../common/reader_font_pinch.dart';
+import '../../common/reader_strings.dart';
 import '../../common/trial_gesture_boundary.dart';
 import '../novel_chapter.dart';
 import '../novel_search.dart';
@@ -34,6 +35,8 @@ class TextReader extends StatefulWidget {
     this.maxParagraphIndex,
     this.onTrialBoundaryReached,
     this.onFontSizeChanged,
+    this.strings = ReaderStrings.auto,
+    this.fontEpoch = 0,
   });
 
   final Uint8List bytes;
@@ -58,6 +61,12 @@ class TextReader extends StatefulWidget {
   /// Argument is `true` for next / end, `false` for previous / start.
   final ValueChanged<bool>? onTrialBoundaryReached;
   final ValueChanged<double>? onFontSizeChanged;
+
+  /// Replaceable UI strings (error/empty states).
+  final ReaderStrings strings;
+
+  /// Bump when a custom font finished loading so cached pagination is redone.
+  final int fontEpoch;
 
   @override
   State<TextReader> createState() => TextReaderState();
@@ -98,6 +107,11 @@ class TextReaderState extends State<TextReader> {
                 _totalCharacters)
             .clamp(0, 1);
 
+  /// Strings resolved against the ambient locale when `strings` is
+  /// [ReaderStrings.auto] (the default).
+  ReaderStrings get _strings =>
+      widget.strings.resolveFor(Localizations.maybeLocaleOf(context));
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +123,7 @@ class TextReaderState extends State<TextReader> {
   @override
   void dispose() {
     _loadVersion++;
+    _paginationRun++;
     _scrollController.dispose();
     _pageController?.dispose();
     super.dispose();
@@ -137,6 +152,7 @@ class TextReaderState extends State<TextReader> {
     }
     if (oldWidget.typography != widget.typography ||
         oldWidget.readingMode != widget.readingMode ||
+        oldWidget.fontEpoch != widget.fontEpoch ||
         oldWidget.minParagraphIndex != widget.minParagraphIndex ||
         oldWidget.maxParagraphIndex != widget.maxParagraphIndex) {
       _pagesReady = false;
@@ -217,14 +233,16 @@ class TextReaderState extends State<TextReader> {
     final raw = await _decoder.decodeBytes(
       widget.bytes,
       encoding: widget.encoding,
+      kind: kind,
     );
+    final headings = _decoder.extractHeadings(raw, kind: kind);
     final content = _decoder.normalizeContent(raw, kind: kind);
     final paragraphs = content
         .split(RegExp(r'\r?\n'))
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList();
-    final chapters = _detectChapters(paragraphs);
+    final chapters = detectTextChapters(paragraphs, headings: headings);
     if (mounted && version == _loadVersion) {
       _paragraphs = paragraphs;
       _characterOffsets = [];
@@ -242,23 +260,15 @@ class TextReaderState extends State<TextReader> {
     return _TextBook(paragraphs: paragraphs);
   }
 
-  List<NovelChapter> _detectChapters(List<String> paragraphs) {
-    final chapterRe = RegExp(
-      r'^(第[\d一二三四五六七八九十百千零两]+[章节回部卷]|Chapter\s+\d+|#\s+.+)',
-      caseSensitive: false,
-    );
-    final out = <NovelChapter>[];
-    for (var i = 0; i < paragraphs.length; i++) {
-      final line = paragraphs[i].split('\n').first.trim();
-      if (chapterRe.hasMatch(line)) {
-        out.add(NovelChapter(title: line, href: '', anchorIndex: i));
-      }
-    }
-    return out;
-  }
+  /// Books above this many characters are paginated in time slices so a
+  /// large file or a font-size drag never freezes the UI.
+  static const _asyncPaginationChars = 30000;
+  int _paginationRun = 0;
+  bool _paginating = false;
 
   void _ensureHorizontalPages(Size size) {
     if (_pagesReady && _layoutSize == size) return;
+    if (_paginating && _layoutSize == size) return;
     _layoutSize = size;
     final style = _textStyle(widget.foregroundColor ?? const Color(0xFF222222));
     final margin = widget.typography.pageMargin;
@@ -266,16 +276,54 @@ class TextReaderState extends State<TextReader> {
       _firstReadableParagraph,
       _lastReadableParagraph + 1,
     );
-    _pages = paginateText(
+    final run = ++_paginationRun;
+    final padding = _pagePadding(margin);
+    final scaler = _scaler;
+    final direction = _direction;
+    final align = _align;
+    final startIndex = _firstReadableParagraph;
+    var chars = 0;
+    for (final paragraph in readable) {
+      chars += paragraph.length;
+    }
+    if (chars <= _asyncPaginationChars) {
+      _paginating = false;
+      _applyPages(
+        paginateText(
+          paragraphs: readable,
+          pageSize: size,
+          style: style,
+          padding: padding,
+          textScaler: scaler,
+          textDirection: direction,
+          textAlign: align,
+          startIndex: startIndex,
+        ),
+      );
+      return;
+    }
+    _paginating = true;
+    paginateTextAsync(
       paragraphs: readable,
       pageSize: size,
       style: style,
-      padding: _pagePadding(margin),
-      textScaler: _scaler,
-      textDirection: _direction,
-      textAlign: _align,
-      startIndex: _firstReadableParagraph,
-    );
+      padding: padding,
+      textScaler: scaler,
+      textDirection: direction,
+      textAlign: align,
+      startIndex: startIndex,
+      isCancelled: () => !mounted || run != _paginationRun,
+    ).then((pages) {
+      if (pages == null || !mounted || run != _paginationRun) return;
+      setState(() {
+        _paginating = false;
+        _applyPages(pages);
+      });
+    });
+  }
+
+  void _applyPages(List<List<TextFragment>> pages) {
+    _pages = pages;
     final pageIndex = _pageIndexForParagraph(_currentParagraph);
     final old = _pageController;
     _pageController = PageController(initialPage: pageIndex);
@@ -338,6 +386,9 @@ class TextReaderState extends State<TextReader> {
         hi = mid - 1;
       }
     }
+    // Vertical mode tracks whole paragraphs only; a stale in-paragraph offset
+    // would restore to the wrong place later.
+    _currentTextOffset = 0;
     if (_currentParagraph != lo) {
       _currentParagraph = lo;
       widget.onParagraphChanged?.call(lo);
@@ -425,9 +476,27 @@ class TextReaderState extends State<TextReader> {
     );
   }
 
-  List<NovelSearchHit> search(String query, {List<NovelChapter>? chapters}) {
-    return searchParagraphs(_paragraphs, query: query, chapters: chapters);
+  /// Search restricted to the readable (trial) window. Matches outside it are
+  /// only counted in [NovelSearchResult.hiddenCount], never returned.
+  NovelSearchResult searchInWindow(
+    String query, {
+    List<NovelChapter>? chapters,
+    bool ignoreDiacritics = false,
+  }) {
+    final min = widget.minParagraphIndex;
+    final max = widget.maxParagraphIndex;
+    return searchParagraphsInWindow(
+      _paragraphs,
+      query: query,
+      chapters: chapters,
+      minIndex: min,
+      maxIndex: max,
+      ignoreDiacritics: ignoreDiacritics,
+    );
   }
+
+  List<NovelSearchHit> search(String query, {List<NovelChapter>? chapters}) =>
+      searchInWindow(query, chapters: chapters).hits;
 
   TextStyle _textStyle(Color fg) {
     return DefaultTextStyle.of(context).style.copyWith(
@@ -441,7 +510,7 @@ class TextReaderState extends State<TextReader> {
 
   TextAlign get _align => widget.typography.textAlign == TextAlignOption.justify
       ? TextAlign.justify
-      : TextAlign.left;
+      : TextAlign.start;
 
   Widget _buildHorizontalPage(
     int index,
@@ -514,11 +583,16 @@ class TextReaderState extends State<TextReader> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
-            return Center(child: Text('Load failed: ${snapshot.error}'));
+            return Center(
+              child: Text(
+                '${_strings.loadFailed}: ${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            );
           }
           final book = snapshot.data!;
           if (book.paragraphs.isEmpty) {
-            return const Center(child: Text('Empty document'));
+            return Center(child: Text(_strings.emptyDocument));
           }
           _paragraphs = book.paragraphs;
 
@@ -526,7 +600,7 @@ class TextReaderState extends State<TextReader> {
           final visibleCount = (_lastReadableParagraph - visibleStart + 1)
               .clamp(0, _paragraphs.length);
           if (visibleCount == 0) {
-            return const Center(child: Text('No readable content'));
+            return Center(child: Text(_strings.noReadableContent));
           }
 
           _currentParagraph = _currentParagraph.clamp(
@@ -656,4 +730,41 @@ class TextReaderState extends State<TextReader> {
 class _TextBook {
   const _TextBook({required this.paragraphs});
   final List<String> paragraphs;
+}
+
+/// Multi-language chapter heading pattern (zh/en/vi/th/id/ms/fil).
+final RegExp _chapterHeading = RegExp(
+  r'^(?:'
+  r'第\s*[\d一二三四五六七八九十百千零两〇]+\s*[章节節回部卷集篇话話幕]'
+  r'|(?:chapter|ch\.|part|book|bab|bahagian|jilid|kabanatang|kabanata|aklat'
+  r'|chương|hồi|phần|quyển|tập)\s+'
+  r'(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)'
+  r'(?![\p{L}\p{N}])'
+  r'|(?:บทที่|ตอนที่|ภาคที่|เล่มที่)\s*[\d๐-๙]+'
+  r'|(?:prologue|epilogue|prolog|epilog)\s*$'
+  r')',
+  caseSensitive: false,
+  unicode: true,
+);
+
+/// Detects chapter headings. [headings] are heading texts extracted from
+/// markdown/HTML before normalisation; they are matched in document order.
+/// Lines longer than 80 characters are never treated as chapter titles.
+@visibleForTesting
+List<NovelChapter> detectTextChapters(
+  List<String> paragraphs, {
+  List<String> headings = const [],
+}) {
+  final out = <NovelChapter>[];
+  var h = 0;
+  for (var i = 0; i < paragraphs.length; i++) {
+    final line = paragraphs[i].split('\n').first.trim();
+    if (line.isEmpty || line.length > 80) continue;
+    final isHeading = h < headings.length && line == headings[h];
+    if (isHeading) h++;
+    if (isHeading || _chapterHeading.hasMatch(line)) {
+      out.add(NovelChapter(title: line, href: '', anchorIndex: i));
+    }
+  }
+  return out;
 }

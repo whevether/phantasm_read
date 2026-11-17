@@ -44,8 +44,11 @@ class ReaderProgressBar extends StatelessWidget {
     required this.progress,
     this.onSeek,
     this.color = const Color(0xFF4CAF50),
+    this.semanticsLabel = '阅读进度',
   });
 
+  /// Screen-reader label; pass [ReaderStrings.progress] for localisation.
+  final String semanticsLabel;
   final double progress;
   final ValueChanged<double>? onSeek;
   final Color color;
@@ -83,11 +86,27 @@ class ReaderProgressBar extends StatelessWidget {
             height: 12,
             child: Align(
               alignment: Alignment.topCenter,
-              child: LinearProgressIndicator(
-                value: p,
-                minHeight: 2,
-                backgroundColor: Colors.black26,
-                color: color,
+              child: Semantics(
+                label: semanticsLabel,
+                value: '${(p * 100).round()}%',
+                increasedValue:
+                    '${((p + 0.05).clamp(0.0, 1.0) * 100).round()}%',
+                decreasedValue:
+                    '${((p - 0.05).clamp(0.0, 1.0) * 100).round()}%',
+                onIncrease: onSeek == null
+                    ? null
+                    : () => onSeek!((p + 0.05).clamp(0.0, 1.0)),
+                onDecrease: onSeek == null
+                    ? null
+                    : () => onSeek!((p - 0.05).clamp(0.0, 1.0)),
+                child: ExcludeSemantics(
+                  child: LinearProgressIndicator(
+                    value: p,
+                    minHeight: 2,
+                    backgroundColor: Colors.black26,
+                    color: color,
+                  ),
+                ),
               ),
             ),
           ),

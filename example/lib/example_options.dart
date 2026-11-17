@@ -182,14 +182,10 @@ class ExampleReaderOptions extends ChangeNotifier {
   String? get novelWatermarkText =>
       novelWatermark ? 'phantasm_read · novel' : null;
 
-  String? get pdfWatermarkText =>
-      pdfWatermark ? 'phantasm_read · pdf' : null;
+  String? get pdfWatermarkText => pdfWatermark ? 'phantasm_read · pdf' : null;
 
   ReaderTrialLimit? get comicTrialLimit => comicTrial
-      ? ReaderTrialLimit.pages(
-          comicTrialPages,
-          startPage: comicTrialStartPage,
-        )
+      ? ReaderTrialLimit.pages(comicTrialPages, startPage: comicTrialStartPage)
       : null;
 
   ReaderTrialLimit? get novelTrialLimit => novelTrial
@@ -200,9 +196,6 @@ class ExampleReaderOptions extends ChangeNotifier {
       : null;
 
   ReaderTrialLimit? get pdfTrialLimit => pdfTrial
-      ? ReaderTrialLimit.pages(
-          pdfTrialPages,
-          startPage: pdfTrialStartPage,
-        )
+      ? ReaderTrialLimit.pages(pdfTrialPages, startPage: pdfTrialStartPage)
       : null;
 }

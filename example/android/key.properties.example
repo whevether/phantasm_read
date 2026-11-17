@@ -1,0 +1,6 @@
+# Copy to key.properties (git-ignored) and fill in real values.
+# Without key.properties the example falls back to debug signing.
+storeFile=../../jks/local_release.jks
+keyAlias=local_release
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME

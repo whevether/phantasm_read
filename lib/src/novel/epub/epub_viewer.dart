@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../../common/reader_trial_limit.dart';
@@ -8,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
+import '../../common/reader_strings.dart';
 import '../novel_chapter.dart';
 import 'epub_bridge.dart';
 
@@ -31,6 +33,9 @@ class EpubViewerController {
 
   Future<String?> currentCfi() async => _state?.currentCfi();
   Future<String> currentText() async => await _state?._bridge?.getText() ?? '';
+
+  /// The book's `dc:language` (e.g. `en`, `zh-CN`), when declared.
+  Future<String?> language() async => _state?._bridge?.getLanguage();
 }
 
 /// EPUB viewer using offline epub.js inside [webview_flutter].
@@ -52,7 +57,19 @@ class EpubViewer extends StatefulWidget {
     this.trialLimit,
     this.onTrialBoundaryReached,
     this.onPositionChanged,
+    this.customFonts = const {},
+    this.strings = ReaderStrings.auto,
+    this.rtl = false,
   });
+
+  /// Force right-to-left text and page progression (otherwise the book decides).
+  final bool rtl;
+
+  /// Replaceable UI strings (error messages).
+  final ReaderStrings strings;
+
+  /// Font family name -> font file bytes, injected via `@font-face`.
+  final Map<String, Uint8List> customFonts;
 
   static bool get isSupported =>
       !kIsWeb &&
@@ -88,6 +105,7 @@ class _EpubViewerState extends State<EpubViewer> {
   String? _error;
   bool _shellReady = false;
   bool _opening = false;
+  final Map<String, Uint8List> _injectedFonts = {};
   int _generation = 0;
   bool _bookOpened = false;
   String? _cfi;
@@ -139,18 +157,31 @@ class _EpubViewerState extends State<EpubViewer> {
     return loc?['cfi'] as String? ?? _cfi;
   }
 
+  /// Fatal: the book cannot be shown, replace the whole view with [error].
+  ReaderStrings get _strings =>
+      widget.strings.resolveFor(Localizations.maybeLocaleOf(context));
+
   void _fail(Object error) {
     if (!mounted) return;
+    final message = error is UnsupportedError
+        ? _strings.epubUnsupported
+        : '${_strings.loadFailed}: $error';
+    widget.onError?.call(message);
+    setState(() => _error = message);
+  }
+
+  /// Non-fatal (typography, flow switch, ...): report but keep the book.
+  void _report(Object error, [StackTrace? _]) {
+    if (!mounted) return;
     widget.onError?.call('$error');
-    setState(() => _error = '$error');
   }
 
   Future<void> _initWebView() async {
     if (!EpubViewer.isSupported) {
-      _fail(
-        UnsupportedError(
-          'EPUB is supported on Android, iOS and macOS. Use text/comic/PDF on this platform.',
-        ),
+      // Localisation needs inherited widgets, unavailable inside initState.
+      scheduleMicrotask(
+        () =>
+            _fail(UnsupportedError('EPUB is not supported on this platform.')),
       );
       return;
     }
@@ -249,8 +280,9 @@ class _EpubViewerState extends State<EpubViewer> {
     _opening = true;
     try {
       final limit = widget.trialLimit;
-      await bridge.openFromBase64(
-        base64Encode(widget.bytes),
+      await bridge.openFromBytes(
+        widget.bytes,
+        isCancelled: () => !mounted || generation != _generation,
         flow: _flow,
         trialStart: limit?.isActive == true ? limit!.startIndex : null,
         trialCount: limit?.isActive == true ? limit!.maxCount : null,
@@ -276,8 +308,19 @@ class _EpubViewerState extends State<EpubViewer> {
     if (bridge == null || !_bookOpened) return;
     try {
       final t = widget.typography;
+      if (widget.rtl) await bridge.setDirection('rtl');
       await bridge.setFontSize(t.fontSize);
       await bridge.setLineHeight(t.lineHeight);
+      for (final entry in widget.customFonts.entries) {
+        if (!identical(_injectedFonts[entry.key], entry.value)) {
+          await bridge.addFontFace(
+            entry.key,
+            base64Encode(entry.value),
+            mime: epubFontMimeType(entry.value),
+          );
+          _injectedFonts[entry.key] = entry.value;
+        }
+      }
       await bridge.setFontFamily(t.fontFamily);
       await bridge.setTypography(
         letterSpacing: t.letterSpacing,
@@ -293,7 +336,7 @@ class _EpubViewerState extends State<EpubViewer> {
         ),
       );
     } catch (e) {
-      if (mounted) _fail(e);
+      _report(e);
     }
   }
 
@@ -315,11 +358,16 @@ class _EpubViewerState extends State<EpubViewer> {
     }
     if (oldWidget.typography != widget.typography ||
         oldWidget.backgroundColor != widget.backgroundColor ||
-        oldWidget.foregroundColor != widget.foregroundColor) {
+        oldWidget.foregroundColor != widget.foregroundColor ||
+        oldWidget.rtl != widget.rtl ||
+        !mapEquals(oldWidget.customFonts, widget.customFonts)) {
       _applyTypography();
     }
     if (oldWidget.readingMode != widget.readingMode && _bookOpened) {
-      _bridge?.setFlow(_flow).then((_) => _applyTypography()).catchError(_fail);
+      _bridge
+          ?.setFlow(_flow)
+          .then((_) => _applyTypography())
+          .catchError(_report);
     }
     if (oldWidget.bytes != widget.bytes ||
         oldWidget.trialLimit != widget.trialLimit) {

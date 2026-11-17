@@ -1,6 +1,6 @@
 # EPUB browser regression test
 
-This test generates a real EPUB ZIP and runs the embedded EPUB.js shell in a temporary headless Chrome context. It checks nested TOC, spine search, asynchronous replies, script isolation, chapter/anchor preview clipping, flow switching and font reset. It uses no account data or installed browser profile.
+This test generates a real EPUB ZIP and runs the embedded EPUB.js shell in a temporary headless Chrome context. It checks nested TOC, spine search, asynchronous replies, script isolation, chapter/anchor preview clipping, flow switching, font reset, chunked upload, book language, dead links/missing anchors, several custom fonts and forced RTL. It uses no account data or installed browser profile.
 
 Install the test tool outside the repository, then run from the repository root:
 

@@ -20,7 +20,15 @@ class ReaderSession with WidgetsBindingObserver {
 
   Future<void> apply(ReaderSettings settings) {
     if (_closed) return Future.value();
+    final previous = _settings;
     _settings = settings;
+    if (_active &&
+        previous.brightness == settings.brightness &&
+        previous.keepScreenOn == settings.keepScreenOn &&
+        previous.immersive == settings.immersive) {
+      // Typography/tap-zone changes must not re-run platform side effects.
+      return _effects;
+    }
     if (!_active) {
       _active = true;
       final state = WidgetsBinding.instance.lifecycleState;

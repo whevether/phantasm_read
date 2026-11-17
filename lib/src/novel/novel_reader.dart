@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
@@ -11,11 +12,14 @@ import '../common/novel_typography.dart';
 import '../common/page_curl.dart';
 import '../common/reader_bookmark.dart';
 import '../common/reader_brightness.dart';
+import '../common/reader_custom_font.dart';
 import '../common/reader_lifecycle.dart';
 import '../common/reader_progress.dart';
 import '../common/reader_settings.dart';
 import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
+import '../common/reader_stats.dart';
+import '../common/reader_strings.dart';
 import '../common/reader_trial_limit.dart';
 import '../common/reader_identity.dart';
 import '../common/reader_watermark.dart';
@@ -52,11 +56,15 @@ class NovelReader extends StatefulWidget {
     this.onChapterChanged,
     this.onSessionTick,
     this.onSync,
+    this.onStats,
+    this.strings = ReaderStrings.auto,
+    this.customFonts = const {},
     this.onKaraokeCue,
     this.showToolbar = true,
     this.rtl = false,
     this.pageTurnEffect = PageTurnEffect.curl,
     this.ttsEngine,
+    this.ttsLanguage,
   });
 
   final NovelSource source;
@@ -79,17 +87,33 @@ class NovelReader extends StatefulWidget {
   final ValueChanged<int>? onChapterChanged;
   final ValueChanged<Duration>? onSessionTick;
   final ReaderSyncCallback? onSync;
+
+  /// Receives per-session reading stats (only readable positions are counted).
+  final ReaderStatsCallback? onStats;
+
+  /// Replaceable UI strings.
+  final ReaderStrings strings;
+
+  /// Host-provided fonts (family -> font file bytes). Use a family name as
+  /// `NovelTypography.fontFamily`; text formats load it via [FontLoader] and
+  /// EPUB injects it with `@font-face`.
+  final Map<String, Uint8List> customFonts;
   final ValueChanged<MediaOverlayCue?>? onKaraokeCue;
   final bool showToolbar;
   final bool rtl;
   final PageTurnEffect pageTurnEffect;
   final NovelTtsEngine? ttsEngine;
 
+  /// BCP-47 language tag for text-to-speech (needs an engine implementing
+  /// [NovelTtsLanguageAware]). Defaults to the EPUB's `dc:language`.
+  final String? ttsLanguage;
+
   @override
   State<NovelReader> createState() => _NovelReaderState();
 }
 
 class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
+  ReaderStatsTracker? _stats;
   late final ReaderBrightness _brightness = ReaderBrightness();
   late ReaderSettings _settings;
   final EpubViewerController _epubController = EpubViewerController();
@@ -118,7 +142,20 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
   bool _ttsSpeaking = false;
   MediaOverlayPlayer? _overlay;
+  Future<void> _overlayChain = Future<void>.value();
   int? _karaokeParagraph;
+
+  /// Offset/percentage cache: `_textKey.currentState` is already null while
+  /// the widget is being disposed, so saving must not read from it.
+  int _cachedTextOffset = 0;
+  double _cachedTextPercentage = 0;
+
+  /// EPUB: the restored location has not been validated against the trial
+  /// window until the viewer reports a location, so nothing is saved/stored.
+  bool _epubLocationConfirmed = false;
+  bool _recordBusy = false;
+  int _fontEpoch = 0;
+  final Map<String, Uint8List> _registeredFonts = {};
 
   String get _bookId =>
       widget.bookId ??
@@ -134,12 +171,32 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     NovelFormat.epub => 'epub',
   };
 
+  /// Strings resolved against the ambient locale when `strings` is
+  /// [ReaderStrings.auto] (the default).
+  ReaderStrings get _strings =>
+      widget.strings.resolveFor(Localizations.maybeLocaleOf(context));
+
   @override
   void initState() {
     super.initState();
     _settings = widget.settings;
     WidgetsBinding.instance.addObserver(this);
+    _registerCustomFonts();
     _bootstrap();
+  }
+
+  /// Loads fonts that are new or changed; the text reader re-paginates once a
+  /// font is ready (the epoch invalidates its cached layout).
+  void _registerCustomFonts() {
+    for (final entry in widget.customFonts.entries) {
+      if (identical(_registeredFonts[entry.key], entry.value)) continue;
+      _registeredFonts[entry.key] = entry.value;
+      loadReaderCustomFont(entry.key, entry.value)
+          .then((_) {
+            if (mounted) setState(() => _fontEpoch++);
+          })
+          .catchError((Object _) {});
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -171,18 +228,27 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       _epubPercentage = progress?.percentage ?? 0;
       _paragraphIndex = progress?.paragraphIndex ?? 0;
       _restoredTextOffset = progress?.textOffset ?? 0;
+      _cachedTextOffset = _restoredTextOffset;
+      _cachedTextPercentage = progress?.percentage ?? 0;
+      _epubLocationConfirmed = false;
       _jumpToParagraph = _paragraphIndex;
       await _session.apply(_settings);
       if (!mounted || version != _loadVersion) return;
+      // A broken overlay must never prevent the book from opening.
       await _loadOverlay(version);
       if (!mounted || version != _loadVersion) return;
       _sessionStarted = DateTime.now();
+      _stats = ReaderStatsTracker(
+        bookId,
+        minDwell: const Duration(milliseconds: 800),
+      );
       _sessionTimer?.cancel();
       _sessionTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted) {
           widget.onSessionTick?.call(
             DateTime.now().difference(_sessionStarted!),
           );
+          _emitStats();
         }
       });
       setState(() => _loading = false);
@@ -196,7 +262,17 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _loadOverlay(int version) async {
+  /// Overlay (re)loads are serialised so two quick prop changes can never
+  /// interleave and leak a player; failures are swallowed.
+  Future<void> _loadOverlay(int version) {
+    final run = _overlayChain
+        .then((_) => _loadOverlayNow(version))
+        .catchError((Object _) {});
+    _overlayChain = run;
+    return run;
+  }
+
+  Future<void> _loadOverlayNow(int version) async {
     final old = _overlay;
     _overlay = null;
     await old?.dispose();
@@ -208,12 +284,24 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     final overlay = MediaOverlayPlayer(
       onCueChanged: (cue) {
         if (!mounted || version != _loadVersion) return;
-        widget.onKaraokeCue?.call(cue);
-        setState(() => _karaokeParagraph = cue?.paragraphIndex);
-        if (cue?.paragraphIndex != null) {
-          _textKey.currentState?.jumpToParagraph(cue!.paragraphIndex!);
+        final paragraph = cue?.paragraphIndex;
+        if (paragraph != null && !_isParagraphReadable(paragraph)) {
+          // Never leak cues (or move the view) outside the trial window:
+          // stop the audio and raise the trial event instead.
+          _overlay?.pause();
+          setState(() => _karaokeParagraph = null);
+          _onTextTrialBoundary(next: true);
+          return;
         }
-        if (cue?.cfi != null) _epubController.goToChapter(cue!.cfi!);
+        widget.onKaraokeCue?.call(cue);
+        setState(() => _karaokeParagraph = paragraph);
+        if (paragraph != null) {
+          _textKey.currentState?.jumpToParagraph(paragraph);
+        }
+        if (cue?.cfi != null) {
+          // The EPUB shell refuses locations outside the trial window.
+          _epubController.goToChapter(cue!.cfi!).catchError((Object _) {});
+        }
       },
     );
     _overlay = overlay;
@@ -236,16 +324,55 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
 
   double get _percentage {
     if (_isEpub) return _epubPercentage.clamp(0, 1);
-    return _textKey.currentState?.characterProgress ?? 0;
+    return _cachedTextPercentage;
+  }
+
+  /// Refreshes the cached text position while the text reader is alive.
+  void _syncTextCache() {
+    final state = _textKey.currentState;
+    if (state == null) return;
+    _cachedTextOffset = state.currentTextOffset;
+    _cachedTextPercentage = state.characterProgress;
+  }
+
+  /// Counts the current, readable position in the session stats.
+  void _recordVisit() {
+    final stats = _stats;
+    if (stats == null) return;
+    if (_isEpub) {
+      if (_epubLocationConfirmed) stats.visit(_chapterIndex);
+    } else {
+      final paragraphs = _textKey.currentState?.paragraphs;
+      if (paragraphs == null ||
+          _paragraphIndex < 0 ||
+          _paragraphIndex >= paragraphs.length ||
+          !_isParagraphReadable(_paragraphIndex)) {
+        return;
+      }
+      stats.visit(_paragraphIndex, chars: paragraphs[_paragraphIndex].length);
+    }
+  }
+
+  /// Stats are independent of progress persistence.
+  void _emitStats() {
+    final stats = _stats;
+    if (stats == null) return;
+    widget.onStats?.call(stats.snapshot());
   }
 
   Future<void> _saveProgress() async {
-    if (!widget.persistProgress || _loading || _bytes == null) return;
+    if (_loading || _bytes == null) return;
+    if (!_isEpub) _syncTextCache();
+    _emitStats();
+    if (!widget.persistProgress) return;
+    // An unconfirmed (restored) EPUB location may lie outside the trial
+    // window; never persist it.
+    if (_isEpub && !_epubLocationConfirmed) return;
     final progress = ReaderProgress(
       bookId: _bookId,
       cfi: _cfi,
       paragraphIndex: _paragraphIndex,
-      textOffset: _isEpub ? null : _textKey.currentState?.currentTextOffset,
+      textOffset: _isEpub ? null : _cachedTextOffset,
       percentage: _percentage,
     );
     await ReaderProgressStore.instance.save(progress);
@@ -305,8 +432,52 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     if (flat.length <= endChapter) return null;
     final blocked = flat[endChapter];
     final anchor = blocked.anchorIndex;
-    if (anchor == null || anchor <= 0) return null;
+    // Fail closed: an unknown anchor must not expose the blocked chapters.
+    if (anchor == null || anchor <= 0) return -1;
     return anchor - 1;
+  }
+
+  /// Whether text paragraph [index] lies inside the trial window.
+  bool _isParagraphReadable(int index) {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive) return true;
+    final min = _trialMinParagraphIndex;
+    final max = _trialMaxParagraphIndex;
+    if (max != null && max < 0) return false;
+    if (min != null && index < min) return false;
+    if (max != null && index > max) return false;
+    return true;
+  }
+
+  /// Clamps a restored/remembered position into the trial window. Called
+  /// once chapters are known and whenever the trial limit changes.
+  void _clampToTrialWindow() {
+    final limit = widget.trialLimit;
+    if (limit == null || !limit.isActive || _isEpub || _flat.isEmpty) return;
+    final min = _trialMinParagraphIndex ?? 0;
+    final max = _trialMaxParagraphIndex;
+    if (max != null && max < min) return;
+    var paragraph = _paragraphIndex;
+    if (paragraph < min) paragraph = min;
+    if (max != null && paragraph > max) paragraph = max;
+    if (paragraph != _paragraphIndex) {
+      _paragraphIndex = paragraph;
+      _restoredTextOffset = 0;
+      _cachedTextOffset = 0;
+      _jumpToParagraph = paragraph;
+    }
+    final start = limit.startIndex;
+    final last = _maxReadableChapterIndex;
+    if (last >= start) {
+      _chapterIndex = _chapterIndexForParagraph(paragraph).clamp(start, last);
+    }
+  }
+
+  void _stopAutoScroll() {
+    if (_autoScroll == null) return;
+    _autoScroll?.cancel();
+    _autoScroll = null;
+    if (mounted) setState(() {});
   }
 
   void _notifyTrialLimit(ReaderTrialLimitAction action, int targetIndex) {
@@ -326,6 +497,8 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
   void _onTextTrialBoundary({required bool next}) {
     final limit = widget.trialLimit;
     if (limit == null || !limit.isActive) return;
+    // Auto page-turning must never keep running into the paywall.
+    _stopAutoScroll();
     if (next) {
       if (!_hasMoreBeyondTrial) return;
       _trialGesture.call(
@@ -390,6 +563,10 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       _chapterIndex = 0;
       _paragraphIndex = 0;
       _cfi = null;
+      _cachedTextOffset = 0;
+      _cachedTextPercentage = 0;
+      _epubLocationConfirmed = false;
+      _registerCustomFonts();
       _bootstrap();
       return;
     }
@@ -397,13 +574,24 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       _settings = widget.settings;
       _session.apply(_settings);
     }
+    if (oldWidget.customFonts != widget.customFonts) {
+      _registerCustomFonts();
+    }
+    if (oldWidget.trialLimit != widget.trialLimit) {
+      // A new window invalidates whatever was remembered: clamp the text
+      // position now; the EPUB shell re-validates its own location on reopen.
+      _autoScroll?.cancel();
+      _autoScroll = null;
+      _epubLocationConfirmed = false;
+      _clampToTrialWindow();
+    }
     if (oldWidget.ttsEngine != widget.ttsEngine) {
       oldWidget.ttsEngine?.setCompletionHandler(null);
       oldWidget.ttsEngine?.stop();
       _ttsSpeaking = false;
     }
     if (oldWidget.mediaOverlaySource != widget.mediaOverlaySource ||
-        oldWidget.mediaOverlayCues != widget.mediaOverlayCues) {
+        !listEquals(oldWidget.mediaOverlayCues, widget.mediaOverlayCues)) {
       _loadOverlay(_loadVersion).then((_) {
         if (mounted) setState(() {});
       });
@@ -413,7 +601,10 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      _stats?.pause();
       _saveProgress();
+    } else if (state == AppLifecycleState.resumed) {
+      _stats?.resume();
     }
   }
 
@@ -450,6 +641,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     setState(() {
       _chapters = chapters;
       _flat = chapters.expand((c) => c.flattened).toList();
+      _clampToTrialWindow();
     });
     widget.onChaptersLoaded?.call(chapters);
   }
@@ -489,7 +681,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     if (!mounted) return;
     if (chapters.isEmpty) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('暂无章节目录')));
+          .showSnackBar(SnackBar(content: Text(_strings.noToc)));
       return;
     }
     await showModalBottomSheet<void>(
@@ -502,6 +694,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
             child: _ChapterTree(
               chapters: chapters,
               depth: 0,
+              title: _strings.selectChapter,
               onSelect: (c) async {
                 Navigator.pop(context);
                 final flat = <NovelChapter>[];
@@ -529,134 +722,100 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
   }
 
   Future<void> _openSearch() async {
-    final controller = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: StatefulBuilder(
-            builder: (context, setModal) {
-              return SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.7,
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: TextField(
-                        controller: controller,
-                        decoration: const InputDecoration(
-                          hintText: '搜索…',
-                          suffixIcon: Icon(Icons.search),
-                        ),
-                        onSubmitted: (_) => setModal(() {}),
-                      ),
-                    ),
-                    Expanded(
-                      child: FutureBuilder<List<NovelSearchHit>>(
-                        future: _runSearch(controller.text),
-                        builder: (context, snap) {
-                          if (snap.hasError) {
-                            return Center(child: Text('搜索失败: ${snap.error}'));
-                          }
-                          if (snap.connectionState != ConnectionState.done) {
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          }
-                          final hits = snap.data ?? const [];
-                          return ListView.builder(
-                            itemCount: hits.length,
-                            itemBuilder: (context, i) {
-                              final h = hits[i];
-                              return ListTile(
-                                title: Text(h.excerpt),
-                                subtitle: h.chapterTitle == null
-                                    ? null
-                                    : Text(h.chapterTitle!),
-                                onTap: () async {
-                                  Navigator.pop(context);
-                                  if (h.cfi != null && h.cfi!.isNotEmpty) {
-                                    await _epubController.goToChapter(h.cfi!);
-                                  } else if (h.paragraphIndex != null) {
-                                    final max = _trialMaxParagraphIndex;
-                                    final min = _trialMinParagraphIndex;
-                                    if ((max != null &&
-                                            h.paragraphIndex! > max) ||
-                                        (min != null &&
-                                            h.paragraphIndex! < min)) {
-                                      _notifyTrialLimit(
-                                        ReaderTrialLimitAction.search,
-                                        _chapterIndexForParagraph(
-                                          h.paragraphIndex!,
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    await _textKey.currentState
-                                        ?.jumpToParagraph(h.paragraphIndex!);
-                                  }
-                                },
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
+      builder: (context) => _SearchSheet(
+        strings: _strings,
+        search: _runSearch,
+        onSelect: (h) async {
+          Navigator.pop(context);
+          if (h.cfi != null && h.cfi!.isNotEmpty) {
+            await _epubController.goToChapter(h.cfi!);
+          } else if (h.paragraphIndex != null) {
+            if (!_isParagraphReadable(h.paragraphIndex!)) {
+              _notifyTrialLimit(
+                ReaderTrialLimitAction.search,
+                _chapterIndexForParagraph(h.paragraphIndex!),
               );
-            },
-          ),
-        );
-      },
+              return;
+            }
+            await _textKey.currentState?.jumpToParagraph(h.paragraphIndex!);
+          }
+        },
+      ),
     );
-    controller.dispose();
   }
 
-  Future<List<NovelSearchHit>> _runSearch(String q) async {
-    if (q.trim().isEmpty) return const [];
+  Future<NovelSearchResult> _runSearch(String q) async {
+    if (q.trim().isEmpty) return const NovelSearchResult();
     if (_isEpub) {
+      // The EPUB shell only searches inside the trial window.
       final raw = await _epubController.search(q);
-      return [
-        for (final m in raw)
-          NovelSearchHit(excerpt: m['excerpt'] ?? '', cfi: m['cfi']),
-      ];
+      return NovelSearchResult(
+        hits: [
+          for (final m in raw)
+            NovelSearchHit(excerpt: m['excerpt'] ?? '', cfi: m['cfi']),
+        ],
+      );
     }
-    return _textKey.currentState?.search(q, chapters: _chapters) ?? const [];
+    final state = _textKey.currentState;
+    if (state == null) return const NovelSearchResult();
+    var result = state.searchInWindow(q, chapters: _chapters);
+    if (result.hits.isEmpty && result.hiddenCount == 0) {
+      // Accent-insensitive retry (Vietnamese tone marks, Latin accents).
+      result = state.searchInWindow(
+        q,
+        chapters: _chapters,
+        ignoreDiacritics: true,
+      );
+    }
+    return result;
+  }
+
+  /// Whether the current location may be bookmarked / highlighted / spoken.
+  bool get _currentLocationReadable {
+    if (_isEpub) return _epubLocationConfirmed;
+    return _isParagraphReadable(_paragraphIndex);
   }
 
   Future<void> _toggleBookmark() async {
-    final title = _isEpub ? (_cfi ?? 'EPUB') : 'Para ${_paragraphIndex + 1}';
-    final existing = _bookmarks.where((b) {
-      if (_isEpub) return b.cfi == _cfi;
-      return b.paragraphIndex == _paragraphIndex;
-    });
-    if (existing.isNotEmpty) {
-      await ReaderBookmarkStore.instance.removeBookmark(
-        _bookId,
-        existing.first.id,
-      );
-    } else {
-      await ReaderBookmarkStore.instance.addBookmark(
-        ReaderBookmark(
-          id: readerRecordId(),
-          bookId: _bookId,
-          title: title,
-          cfi: _cfi,
-          paragraphIndex: _isEpub ? null : _paragraphIndex,
-        ),
-      );
+    if (_recordBusy || !_currentLocationReadable) return;
+    _recordBusy = true;
+    try {
+      final existing = _bookmarks.where((b) {
+        if (_isEpub) return b.cfi == _cfi;
+        return b.paragraphIndex == _paragraphIndex;
+      });
+      if (existing.isNotEmpty) {
+        await ReaderBookmarkStore.instance.removeBookmark(
+          _bookId,
+          existing.first.id,
+        );
+      } else {
+        // The title is intentionally empty: it is derived (and localised) at
+        // display time from the position, never stored in one language.
+        await ReaderBookmarkStore.instance.addBookmark(
+          ReaderBookmark(
+            id: readerRecordId(),
+            bookId: _bookId,
+            title: '',
+            cfi: _isEpub ? _cfi : null,
+            paragraphIndex: _isEpub ? null : _paragraphIndex,
+          ),
+        );
+      }
+      _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+      if (mounted) setState(() {});
+    } finally {
+      _recordBusy = false;
     }
-    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
-    if (mounted) setState(() {});
   }
 
   Future<void> _addHighlight() async {
-    if (!widget.enableHighlights) return;
+    if (!widget.enableHighlights || _recordBusy || !_currentLocationReadable) {
+      return;
+    }
     final paras = _textKey.currentState?.paragraphs;
     final excerpt = _isEpub
         ? (_cfi ?? '')
@@ -666,24 +825,27 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
               ? paras[_paragraphIndex]
               : '');
     if (excerpt.isEmpty) return;
-    await ReaderBookmarkStore.instance.addHighlight(
-      ReaderHighlight(
-        id: readerRecordId(),
-        bookId: _bookId,
-        excerpt: excerpt.length > 120 ? excerpt.substring(0, 120) : excerpt,
-        cfi: _cfi,
-        paragraphIndex: _isEpub ? null : _paragraphIndex,
-      ),
-    );
-    _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
-    if (mounted) setState(() {});
+    _recordBusy = true;
+    try {
+      await ReaderBookmarkStore.instance.addHighlight(
+        ReaderHighlight(
+          id: readerRecordId(),
+          bookId: _bookId,
+          excerpt: excerpt.length > 120 ? excerpt.substring(0, 120) : excerpt,
+          cfi: _isEpub ? _cfi : null,
+          paragraphIndex: _isEpub ? null : _paragraphIndex,
+        ),
+      );
+      _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+      if (mounted) setState(() {});
+    } finally {
+      _recordBusy = false;
+    }
   }
 
   void _toggleAutoScroll() {
     if (_autoScroll != null) {
-      _autoScroll!.cancel();
-      _autoScroll = null;
-      setState(() {});
+      _stopAutoScroll();
       return;
     }
     _autoScroll = Timer.periodic(
@@ -701,17 +863,16 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
               _settings.novelReadingMode == NovelReadingMode.vertical) {
             final moved = await _textKey.currentState?.scrollBy(3) ?? false;
             if (!moved) {
-              _autoScroll?.cancel();
-              _autoScroll = null;
-              if (mounted) setState(() {});
+              // End of the readable range: stop, and report the paywall.
+              _stopAutoScroll();
+              if (_hasMoreBeyondTrial) _onTextTrialBoundary(next: true);
             }
           } else {
-            await _page(1);
+            final advanced = await _page(1);
+            if (!advanced) _stopAutoScroll();
           }
         } catch (_) {
-          _autoScroll?.cancel();
-          _autoScroll = null;
-          if (mounted) setState(() {});
+          _stopAutoScroll();
         } finally {
           _autoBusy = false;
         }
@@ -725,9 +886,10 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     if (engine == null) return;
     if (_ttsSpeaking) {
       await engine.stop();
-      setState(() => _ttsSpeaking = false);
+      if (mounted) setState(() => _ttsSpeaking = false);
       return;
     }
+    if (!_currentLocationReadable) return;
     final paras = _textKey.currentState?.paragraphs;
     final text = _isEpub
         ? await _epubController.currentText()
@@ -736,35 +898,61 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                   _paragraphIndex < paras.length
               ? paras[_paragraphIndex]
               : '');
-    if (!mounted || text.isEmpty) return;
+    if (!mounted || text.trim().isEmpty) return;
+    final language =
+        widget.ttsLanguage ??
+        (_isEpub ? await _epubController.language() : null);
+    if (!mounted) return;
+    if (engine is NovelTtsLanguageAware && language != null) {
+      try {
+        await (engine as NovelTtsLanguageAware).setLanguage(language);
+      } catch (_) {
+        // An unsupported language must not prevent reading aloud.
+      }
+    }
+    // Engines limit the utterance length: read a long chapter in chunks.
+    final chunks = chunkForTts(text);
+    var next = 0;
+    Future<void> speakNext() async {
+      if (!mounted || !_ttsSpeaking) return;
+      if (next >= chunks.length) {
+        setState(() => _ttsSpeaking = false);
+        return;
+      }
+      try {
+        await engine.speak(chunks[next++]);
+      } catch (_) {
+        if (mounted) setState(() => _ttsSpeaking = false);
+      }
+    }
+
     setState(() => _ttsSpeaking = true);
     engine.setCompletionHandler(() {
-      if (mounted) setState(() => _ttsSpeaking = false);
+      speakNext();
     });
-    try {
-      await engine.speak(text);
-    } catch (_) {
-      if (mounted) setState(() => _ttsSpeaking = false);
-    }
+    await speakNext();
   }
 
-  Future<void> _page(int delta) async {
+  /// Turns one page. Returns `false` when nothing more could be shown (end of
+  /// the readable range), which stops auto page-turning.
+  Future<bool> _page(int delta) async {
     if (_isEpub) {
       if (delta > 0) {
         await _epubController.next();
       } else {
         await _epubController.prev();
       }
-      return;
+      return true;
     }
     if (delta > 0) {
       final advanced = await _textKey.currentState?.nextPage() ?? false;
       if (!advanced && _hasMoreBeyondTrial) {
-        _notifyTrialLimit(ReaderTrialLimitAction.next, _chapterIndex + 1);
+        _onTextTrialBoundary(next: true);
       }
-    } else {
-      await _textKey.currentState?.prevPage();
+      return advanced;
     }
+    await _textKey.currentState?.prevPage();
+    return true;
   }
 
   Widget _buildContent() {
@@ -772,13 +960,16 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text('Load failed: $_loadError', textAlign: TextAlign.center),
+          child: Text(
+            '${_strings.loadFailed}: $_loadError',
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
     final bytes = _bytes;
     if (bytes == null) {
-      return const Center(child: Text('No content'));
+      return Center(child: Text(_strings.noContent));
     }
     final bg = _settings.backgroundColor == null
         ? null
@@ -791,16 +982,22 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     if (_isEpub) {
       return EpubViewer(
         key: ValueKey(_bookId),
+        strings: _strings,
+        rtl: widget.rtl,
+        customFonts: widget.customFonts,
         bytes: bytes,
         trialLimit: widget.trialLimit,
         onTrialBoundaryReached: (next) => _onTextTrialBoundary(next: next),
         onPositionChanged: (index, percentage) {
           if (!mounted) return;
           final changed = _chapterIndex != index;
+          // The shell only reports locations inside the trial window.
+          _epubLocationConfirmed = true;
           setState(() {
             _chapterIndex = index;
             _epubPercentage = percentage;
           });
+          _recordVisit();
           if (changed) widget.onChapterChanged?.call(index);
         },
         controller: _epubController,
@@ -811,6 +1008,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
         foregroundColor: fg,
         onLocationChanged: (cfi) {
           _cfi = cfi;
+          _epubLocationConfirmed = true;
           widget.onLocationChanged?.call(cfi);
           _saveProgress();
         },
@@ -841,8 +1039,12 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       },
       rtl: widget.rtl,
       pageTurnEffect: widget.pageTurnEffect,
+      strings: _strings,
+      fontEpoch: _fontEpoch,
       onParagraphChanged: (i) {
         _paragraphIndex = i;
+        _syncTextCache();
+        _recordVisit();
         final chapter = _chapterIndexForParagraph(i);
         if (_chapterIndex != chapter) {
           _chapterIndex = chapter;
@@ -870,14 +1072,20 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
-        if (event is! KeyDownEvent) return KeyEventResult.ignored;
         final key = event.logicalKey;
-        if (key == LogicalKeyboardKey.audioVolumeUp ||
+        final volume =
+            _settings.volumeKeyPaging &&
+            (key == LogicalKeyboardKey.audioVolumeUp ||
+                key == LogicalKeyboardKey.audioVolumeDown);
+        // Swallow volume-key repeats too (no system volume change).
+        if (event is KeyRepeatEvent && volume) return KeyEventResult.handled;
+        if (event is! KeyDownEvent) return KeyEventResult.ignored;
+        if ((volume && key == LogicalKeyboardKey.audioVolumeUp) ||
             key == LogicalKeyboardKey.arrowRight) {
           _page(widget.rtl ? -1 : 1);
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.audioVolumeDown ||
+        if ((volume && key == LogicalKeyboardKey.audioVolumeDown) ||
             key == LogicalKeyboardKey.arrowLeft) {
           _page(widget.rtl ? 1 : -1);
           return KeyEventResult.handled;
@@ -897,7 +1105,13 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                     setState(() => _toolbarVisible = !_toolbarVisible);
                   }
                 },
-                child: _buildContent(),
+                child: Semantics(
+                  label: _strings.toggleToolbar,
+                  onTap: widget.showToolbar
+                      ? () => setState(() => _toolbarVisible = !_toolbarVisible)
+                      : null,
+                  child: _buildContent(),
+                ),
               ),
               BrightnessOverlay(
                 brightness: _brightness.value,
@@ -910,12 +1124,15 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                   '$_bookId:${_isEpub ? _cfi : '$_paragraphIndex:${_textKey.currentState?.currentTextOffset ?? 0}'}',
                 ),
                 bookId: _bookId,
-                location:
-                    _isEpub ? _cfi ?? 'start' : '$_paragraphIndex:${_textKey.currentState?.currentTextOffset ?? 0}',
+                location: _isEpub
+                    ? _cfi ?? 'start'
+                    : '$_paragraphIndex:${_textKey.currentState?.currentTextOffset ?? 0}',
                 enabled: widget.enableInk,
+                strings: _strings,
               ),
               if (!_toolbarVisible)
                 ReaderProgressBar(
+                  semanticsLabel: _strings.progress,
                   progress: progress.clamp(0.0, 1.0),
                   onSeek: (v) {
                     if (!_isEpub) {
@@ -944,6 +1161,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                 ),
               if (widget.showToolbar && _toolbarVisible)
                 _NovelToolbar(
+                  strings: _strings,
                   settings: _settings,
                   hasChapters: _chapters.isNotEmpty || _isEpub,
                   autoScroll: _autoScroll != null,
@@ -980,8 +1198,10 @@ class _ChapterTree extends StatelessWidget {
     required this.chapters,
     required this.depth,
     required this.onSelect,
+    required this.title,
   });
 
+  final String title;
   final List<NovelChapter> chapters;
   final int depth;
   final ValueChanged<NovelChapter> onSelect;
@@ -1000,10 +1220,13 @@ class _ChapterTree extends StatelessWidget {
     return ListView.builder(
       itemCount: rows.length + 1,
       itemBuilder: (context, i) {
-        if (i == 0) return const ListTile(title: Text('选择章节'));
+        if (i == 0) return ListTile(title: Text(title));
         final (chapter, level) = rows[i - 1];
         return ListTile(
-          contentPadding: EdgeInsets.only(left: 16.0 + level * 16, right: 16),
+          contentPadding: EdgeInsetsDirectional.only(
+            start: 16.0 + level * 16,
+            end: 16,
+          ),
           title: Text(chapter.title),
           onTap: () => onSelect(chapter),
         );
@@ -1014,6 +1237,7 @@ class _ChapterTree extends StatelessWidget {
 
 class _NovelToolbar extends StatelessWidget {
   const _NovelToolbar({
+    required this.strings,
     required this.settings,
     required this.hasChapters,
     required this.autoScroll,
@@ -1034,6 +1258,7 @@ class _NovelToolbar extends StatelessWidget {
     this.onOverlayPause,
   });
 
+  final ReaderStrings strings;
   final ReaderSettings settings;
   final bool hasChapters;
   final bool autoScroll;
@@ -1065,305 +1290,497 @@ class _NovelToolbar extends StatelessWidget {
         color: Colors.black54,
         child: SafeArea(
           top: false,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        onPressed: onPrevChapter,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(
-                          Icons.skip_previous,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: onPrevPage,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(
-                          Icons.chevron_left,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: onNextPage,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(
-                          Icons.chevron_right,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: onNextChapter,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.skip_next, color: Colors.white),
-                      ),
-                      IconButton(
-                        onPressed: onSearch,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.search, color: Colors.white),
-                      ),
-                      if (hasChapters)
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.6,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
                         IconButton(
-                          onPressed: onSelectChapter,
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.list_alt, color: Colors.white),
-                        ),
-                      IconButton(
-                        onPressed: onBookmark,
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(
-                          Icons.bookmark_border,
-                          color: Colors.white,
-                        ),
-                      ),
-                      if (enableHighlights)
-                        IconButton(
-                          onPressed: onHighlight,
+                          tooltip: strings.previousChapter,
+                          onPressed: onPrevChapter,
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(
-                            Icons.highlight,
+                            Icons.skip_previous,
                             color: Colors.white,
                           ),
                         ),
-                    ],
-                  ),
-                ),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.brightness_6,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                    Expanded(
-                      child: Slider(
-                        value: settings.brightness,
-                        onChanged: (v) =>
-                            onSettingsChanged(settings.copyWith(brightness: v)),
-                      ),
-                    ),
-                  ],
-                ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        tooltip: '方向',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => onSettingsChanged(
-                          settings.copyWith(
-                            novelReadingMode: mode == NovelReadingMode.vertical
-                                ? NovelReadingMode.horizontal
-                                : NovelReadingMode.vertical,
+                        IconButton(
+                          tooltip: strings.previousPage,
+                          onPressed: onPrevPage,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.chevron_left,
+                            color: Colors.white,
                           ),
                         ),
-                        icon: Icon(
-                          mode == NovelReadingMode.vertical
-                              ? Icons.swap_vert
-                              : Icons.swap_horiz,
-                          color: Colors.white,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '自动滚屏',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: onAutoScroll,
-                        icon: Icon(
-                          Icons.vertical_align_bottom,
-                          color: autoScroll ? Colors.amber : Colors.white,
-                        ),
-                      ),
-                      if (onTts != null)
                         IconButton(
-                          tooltip: '朗读',
+                          tooltip: strings.nextPage,
+                          onPressed: onNextPage,
                           visualDensity: VisualDensity.compact,
-                          onPressed: onTts,
+                          icon: const Icon(
+                            Icons.chevron_right,
+                            color: Colors.white,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: strings.nextChapter,
+                          onPressed: onNextChapter,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.skip_next,
+                            color: Colors.white,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: strings.search,
+                          onPressed: onSearch,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.search, color: Colors.white),
+                        ),
+                        if (hasChapters)
+                          IconButton(
+                            tooltip: strings.toc,
+                            onPressed: onSelectChapter,
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(
+                              Icons.list_alt,
+                              color: Colors.white,
+                            ),
+                          ),
+                        IconButton(
+                          tooltip: strings.addBookmark,
+                          onPressed: onBookmark,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.bookmark_border,
+                            color: Colors.white,
+                          ),
+                        ),
+                        if (enableHighlights)
+                          IconButton(
+                            tooltip: strings.highlight,
+                            onPressed: onHighlight,
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(
+                              Icons.highlight,
+                              color: Colors.white,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.brightness_6,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: settings.brightness,
+                          label: '${(settings.brightness * 100).round()}%',
+                          semanticFormatterCallback: (v) =>
+                              '${strings.brightness} ${(v * 100).round()}%',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(brightness: v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: strings.orientation,
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => onSettingsChanged(
+                            settings.copyWith(
+                              novelReadingMode:
+                                  mode == NovelReadingMode.vertical
+                                  ? NovelReadingMode.horizontal
+                                  : NovelReadingMode.vertical,
+                            ),
+                          ),
                           icon: Icon(
-                            Icons.record_voice_over,
-                            color: ttsOn ? Colors.amber : Colors.white,
-                          ),
-                        ),
-                      if (onOverlayPlay != null)
-                        IconButton(
-                          tooltip: '有声播放',
-                          visualDensity: VisualDensity.compact,
-                          onPressed: onOverlayPlay,
-                          icon: const Icon(
-                            Icons.play_arrow,
+                            mode == NovelReadingMode.vertical
+                                ? Icons.swap_vert
+                                : Icons.swap_horiz,
                             color: Colors.white,
                           ),
                         ),
-                      if (onOverlayPause != null)
                         IconButton(
-                          tooltip: '有声暂停',
+                          tooltip: strings.autoScroll,
                           visualDensity: VisualDensity.compact,
-                          onPressed: onOverlayPause,
-                          icon: const Icon(Icons.pause, color: Colors.white),
+                          onPressed: onAutoScroll,
+                          icon: Icon(
+                            Icons.vertical_align_bottom,
+                            color: autoScroll ? Colors.amber : Colors.white,
+                          ),
                         ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
+                        if (onTts != null)
+                          IconButton(
+                            tooltip: strings.tts,
+                            visualDensity: VisualDensity.compact,
+                            onPressed: onTts,
+                            icon: Icon(
+                              Icons.record_voice_over,
+                              color: ttsOn ? Colors.amber : Colors.white,
+                            ),
+                          ),
+                        if (onOverlayPlay != null)
+                          IconButton(
+                            tooltip: strings.audioPlay,
+                            visualDensity: VisualDensity.compact,
+                            onPressed: onOverlayPlay,
+                            icon: const Icon(
+                              Icons.play_arrow,
+                              color: Colors.white,
+                            ),
+                          ),
+                        if (onOverlayPause != null)
+                          IconButton(
+                            tooltip: strings.audioPause,
+                            visualDensity: VisualDensity.compact,
+                            onPressed: onOverlayPause,
+                            icon: const Icon(Icons.pause, color: Colors.white),
+                          ),
+                        IconButton(
+                          tooltip: strings.keepScreenOn,
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => onSettingsChanged(
+                            settings.copyWith(
+                              keepScreenOn: !settings.keepScreenOn,
+                            ),
+                          ),
+                          icon: Icon(
+                            settings.keepScreenOn
+                                ? Icons.phonelink_lock
+                                : Icons.phonelink_erase,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      const Text('A-', style: TextStyle(color: Colors.white)),
+                      Expanded(
+                        child: Slider(
+                          min: 12,
+                          max: 36,
+                          value: t.fontSize.clamp(12, 36),
+                          label: t.fontSize.toStringAsFixed(0),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.fontSize} ${v.round()}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(
+                              typography: t.copyWith(fontSize: v),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Text('A+', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 72),
+                        child: Text(
+                          strings.lineHeight,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          min: 1.2,
+                          max: 2.4,
+                          value: t.lineHeight.clamp(1.2, 2.4),
+                          label: t.lineHeight.toStringAsFixed(1),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.lineHeight} ${v.toStringAsFixed(1)}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(
+                              typography: t.copyWith(lineHeight: v),
+                            ),
+                          ),
+                        ),
+                      ),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 72),
+                        child: Text(
+                          strings.pageMargin,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          min: 8,
+                          max: 40,
+                          value: t.pageMargin.clamp(8, 40),
+                          label: t.pageMargin.toStringAsFixed(0),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.pageMargin} ${v.round()}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(
+                              typography: t.copyWith(pageMargin: v),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 72),
+                        child: Text(
+                          strings.letterSpacing,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          min: 0,
+                          max: 4,
+                          value: t.letterSpacing.clamp(0, 4),
+                          label: t.letterSpacing.toStringAsFixed(1),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.letterSpacing} ${v.toStringAsFixed(1)}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(
+                              typography: t.copyWith(letterSpacing: v),
+                            ),
+                          ),
+                        ),
+                      ),
+                      TextButton(
                         onPressed: () => onSettingsChanged(
                           settings.copyWith(
-                            keepScreenOn: !settings.keepScreenOn,
+                            typography: t.copyWith(
+                              textAlign: t.textAlign == TextAlignOption.left
+                                  ? TextAlignOption.justify
+                                  : TextAlignOption.left,
+                            ),
                           ),
                         ),
-                        icon: Icon(
-                          settings.keepScreenOn
-                              ? Icons.phonelink_lock
-                              : Icons.phonelink_erase,
-                          color: Colors.white,
+                        child: Text(
+                          t.textAlign == TextAlignOption.justify
+                              ? strings.alignJustify
+                              : strings.alignLeft,
+                          style: const TextStyle(color: Colors.white),
                         ),
                       ),
                     ],
                   ),
-                ),
-                Row(
-                  children: [
-                    const Text('A-', style: TextStyle(color: Colors.white)),
-                    Expanded(
-                      child: Slider(
-                        min: 12,
-                        max: 36,
-                        value: t.fontSize.clamp(12, 36),
-                        onChanged: (v) => onSettingsChanged(
-                          settings.copyWith(
-                            typography: t.copyWith(fontSize: v),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Text('A+', style: TextStyle(color: Colors.white)),
-                  ],
-                ),
-                Row(
-                  children: [
-                    const Text(
-                      '行距',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                    Expanded(
-                      child: Slider(
-                        min: 1.2,
-                        max: 2.4,
-                        value: t.lineHeight.clamp(1.2, 2.4),
-                        onChanged: (v) => onSettingsChanged(
-                          settings.copyWith(
-                            typography: t.copyWith(lineHeight: v),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const Text(
-                      '边距',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                    Expanded(
-                      child: Slider(
-                        min: 8,
-                        max: 40,
-                        value: t.pageMargin.clamp(8, 40),
-                        onChanged: (v) => onSettingsChanged(
-                          settings.copyWith(
-                            typography: t.copyWith(pageMargin: v),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    const Text(
-                      '字距',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                    Expanded(
-                      child: Slider(
-                        min: 0,
-                        max: 4,
-                        value: t.letterSpacing.clamp(0, 4),
-                        onChanged: (v) => onSettingsChanged(
-                          settings.copyWith(
-                            typography: t.copyWith(letterSpacing: v),
-                          ),
-                        ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => onSettingsChanged(
-                        settings.copyWith(
-                          typography: t.copyWith(
-                            textAlign: t.textAlign == TextAlignOption.left
-                                ? TextAlignOption.justify
-                                : TextAlignOption.left,
-                          ),
-                        ),
-                      ),
-                      child: Text(
-                        t.textAlign == TextAlignOption.justify ? '两端' : '左齐',
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final f in NovelFontOption.defaults)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(f.label),
-                            selected: t.fontFamily == f.family,
-                            onSelected: (_) => onSettingsChanged(
-                              settings.copyWith(
-                                typography: t.copyWith(fontFamily: f.family),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final f in NovelFontOption.defaults)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(
+                                f.family == null ? strings.systemFont : f.label,
+                              ),
+                              selected: t.fontFamily == f.family,
+                              onSelected: (_) => onSettingsChanged(
+                                settings.copyWith(
+                                  typography: t.copyWith(fontFamily: f.family),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final preset in NovelThemePreset.defaults)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: InkWell(
-                            onTap: () => onSettingsChanged(
-                              settings.copyWith(
-                                backgroundColor: preset.background,
-                                foregroundColor: preset.foreground,
+                  const SizedBox(height: 6),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final preset in NovelThemePreset.defaults)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Semantics(
+                              button: true,
+                              selected:
+                                  settings.backgroundColor == preset.background,
+                              label: preset.name,
+                              excludeSemantics: true,
+                              onTap: () => onSettingsChanged(
+                                settings.copyWith(
+                                  backgroundColor: preset.background,
+                                  foregroundColor: preset.foreground,
+                                ),
+                              ),
+                              child: InkWell(
+                                customBorder: const CircleBorder(),
+                                onTap: () => onSettingsChanged(
+                                  settings.copyWith(
+                                    backgroundColor: preset.background,
+                                    foregroundColor: preset.foreground,
+                                  ),
+                                ),
+                                child: SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: Center(
+                                    child: CircleAvatar(
+                                      radius: 14,
+                                      backgroundColor: Color(preset.background),
+                                      child:
+                                          settings.backgroundColor ==
+                                              preset.background
+                                          ? const Icon(Icons.check, size: 14)
+                                          : null,
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
-                            child: CircleAvatar(
-                              radius: 14,
-                              backgroundColor: Color(preset.background),
-                              child:
-                                  settings.backgroundColor == preset.background
-                                  ? const Icon(Icons.check, size: 14)
-                                  : null,
-                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Search panel. Owns its controller and result future so rebuilds (keyboard,
+/// animations) never re-run the search or dispose a live controller.
+class _SearchSheet extends StatefulWidget {
+  const _SearchSheet({
+    required this.strings,
+    required this.search,
+    required this.onSelect,
+  });
+
+  final ReaderStrings strings;
+  final Future<NovelSearchResult> Function(String query) search;
+  final Future<void> Function(NovelSearchHit hit) onSelect;
+
+  @override
+  State<_SearchSheet> createState() => _SearchSheetState();
+}
+
+class _SearchSheetState extends State<_SearchSheet> {
+  final TextEditingController _controller = TextEditingController();
+  Future<NovelSearchResult>? _future;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final future = widget.search(_controller.text);
+    setState(() {
+      _future = future;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = widget.strings;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.7,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: TextField(
+                controller: _controller,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: strings.searchHint,
+                  suffixIcon: IconButton(
+                    tooltip: strings.search,
+                    icon: const Icon(Icons.search),
+                    onPressed: _submit,
+                  ),
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+            ),
+            Expanded(
+              child: FutureBuilder<NovelSearchResult>(
+                future: _future,
+                builder: (context, snap) {
+                  if (_future == null) return const SizedBox.shrink();
+                  if (snap.hasError) {
+                    return Center(
+                      child: Text('${strings.searchFailed}: ${snap.error}'),
+                    );
+                  }
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  final result = snap.data ?? const NovelSearchResult();
+                  final hits = result.hits;
+                  if (hits.isEmpty && result.hiddenCount == 0) {
+                    return Center(child: Text(strings.noResults));
+                  }
+                  return ListView.builder(
+                    itemCount: hits.length + (result.hiddenCount > 0 ? 1 : 0),
+                    itemBuilder: (context, i) {
+                      if (i == hits.length) {
+                        return ListTile(
+                          leading: const Icon(Icons.lock_outline),
+                          title: Text(strings.outsideTrial(result.hiddenCount)),
+                        );
+                      }
+                      final h = hits[i];
+                      return ListTile(
+                        title: Text(h.excerpt),
+                        subtitle: h.chapterTitle == null
+                            ? null
+                            : Text(h.chapterTitle!),
+                        onTap: () => widget.onSelect(h),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );

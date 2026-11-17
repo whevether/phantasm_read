@@ -5,7 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:phantasm_read/src/novel/text/text_reader.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:phantasm_read/src/common/reader_kv.dart';
 import 'package:archive/archive.dart';
 import 'package:phantasm_read/phantasm_read.dart';
 import 'package:phantasm_read/src/novel/text/text_decoder.dart';
@@ -67,7 +67,7 @@ void main() {
     expect(pages.bytes.map((b) => b.first).toList(), [1, 2, 10]);
   });
   test('Concurrent bookmark writes preserve both additions', () async {
-    SharedPreferences.setMockInitialValues({});
+    await ReaderKv.useMemoryForTesting();
     await Future.wait([
       ReaderBookmarkStore.instance.addBookmark(
         const ReaderBookmark(id: '1', bookId: 'audit', title: 'one'),
@@ -85,7 +85,7 @@ void main() {
   testWidgets('Double-page comic never displays image beyond trial', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({});
+    await ReaderKv.useMemoryForTesting();
     final png = base64Decode(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=',
     );

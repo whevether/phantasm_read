@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:phantasm_read/src/common/reader_kv.dart';
 import 'package:printing/printing.dart';
 // Printing exposes its platform seam in src for platform implementations.
 import 'package:printing/src/interface.dart';
@@ -13,7 +13,6 @@ import 'package:phantasm_read/src/common/reader_identity.dart';
 import 'package:phantasm_read/src/common/reader_page_window.dart';
 import 'package:phantasm_read/src/common/reader_lifecycle.dart';
 import 'package:phantasm_read/src/novel/epub/epub_bridge.dart';
-import 'package:phantasm_read/src/novel/novel_bytes_source.dart';
 import 'package:phantasm_read/src/pdf/pdf_raster_cache.dart';
 
 class FakePrinting extends PrintingPlatform {
@@ -53,7 +52,7 @@ Future<void> settleReader(WidgetTester tester) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(ReaderKv.useMemoryForTesting);
   test(
     'Stable IDs survive object reconstruction and distinguish in-memory books',
     () {
@@ -261,8 +260,9 @@ void main() {
     await settleReader(tester);
     await tester.dragFrom(const Offset(50, 150), const Offset(100, 60));
     await settleReader(tester);
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('phantasm_ink_${jsonEncode(['ink', '1'])}');
+    final saved = await tester.runAsync(
+      () => ReaderKv.getString('phantasm_ink_${jsonEncode(['ink', '1'])}'),
+    );
     expect(saved, isNotNull);
     expect((jsonDecode(saved!) as List).single['normalized'], true);
     await tester.pumpWidget(ink('2'));

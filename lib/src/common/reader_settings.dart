@@ -15,6 +15,8 @@ class ReaderSettings {
     this.comicBackground = 0xFF000000,
     this.tapZonesEnabled = true,
     this.immersive = true,
+    this.volumeKeyPaging = false,
+    this.comicAutoCrop = false,
   }) : assert(brightness >= 0 && brightness <= 1);
 
   final double brightness;
@@ -33,6 +35,12 @@ class ReaderSettings {
   final bool tapZonesEnabled;
   final bool immersive;
 
+  /// Use hardware volume keys to turn pages. Off by default.
+  final bool volumeKeyPaging;
+
+  /// Trim near-uniform margins from comic pages (off by default).
+  final bool comicAutoCrop;
+
   ReaderSettings copyWith({
     double? brightness,
     bool? keepScreenOn,
@@ -45,6 +53,8 @@ class ReaderSettings {
     int? comicBackground,
     bool? tapZonesEnabled,
     bool? immersive,
+    bool? volumeKeyPaging,
+    bool? comicAutoCrop,
     bool clearBackgroundColor = false,
     bool clearForegroundColor = false,
   }) {
@@ -64,8 +74,47 @@ class ReaderSettings {
       comicBackground: comicBackground ?? this.comicBackground,
       tapZonesEnabled: tapZonesEnabled ?? this.tapZonesEnabled,
       immersive: immersive ?? this.immersive,
+      volumeKeyPaging: volumeKeyPaging ?? this.volumeKeyPaging,
+      comicAutoCrop: comicAutoCrop ?? this.comicAutoCrop,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReaderSettings &&
+          other.brightness == brightness &&
+          other.keepScreenOn == keepScreenOn &&
+          other.typography == typography &&
+          other.backgroundColor == backgroundColor &&
+          other.foregroundColor == foregroundColor &&
+          other.novelReadingMode == novelReadingMode &&
+          other.comicFitMode == comicFitMode &&
+          other.doublePage == doublePage &&
+          other.comicBackground == comicBackground &&
+          // ignore: deprecated_member_use_from_same_package
+          other.tapZonesEnabled == tapZonesEnabled &&
+          other.immersive == immersive &&
+          other.volumeKeyPaging == volumeKeyPaging &&
+          other.comicAutoCrop == comicAutoCrop;
+
+  @override
+  int get hashCode => Object.hash(
+    brightness,
+    keepScreenOn,
+    typography,
+    backgroundColor,
+    foregroundColor,
+    novelReadingMode,
+    comicFitMode,
+    doublePage,
+    comicBackground,
+    // ignore: deprecated_member_use_from_same_package
+    tapZonesEnabled,
+    immersive,
+    volumeKeyPaging,
+    comicAutoCrop,
+  );
 }
 
 /// Preset reading themes for novels.

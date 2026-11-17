@@ -42,8 +42,7 @@ bool isTrialNextSentinel({
   required int index,
   required int readableCount,
   required bool hasMoreBeyond,
-}) =>
-    hasMoreBeyond && readableCount > 0 && index >= readableCount;
+}) => hasMoreBeyond && readableCount > 0 && index >= readableCount;
 
 int trialPageViewCount(int readableCount, bool hasMoreBeyond) {
   if (readableCount <= 0) return 0;

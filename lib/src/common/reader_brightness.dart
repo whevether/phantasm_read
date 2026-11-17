@@ -19,7 +19,9 @@ class ReaderBrightness extends ChangeNotifier {
 
   Future<void> apply(double brightness) {
     if (_disposed) return Future.value();
-    _pending = _pending.then((_) => _apply(brightness));
+    _pending = _pending
+        .then((_) => _apply(brightness))
+        .catchError((Object _) {});
     return _pending;
   }
 

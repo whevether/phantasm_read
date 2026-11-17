@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -83,6 +84,50 @@ class EpubBridge {
     trialCount,
     initialCfi,
   ]);
+
+  /// Sends [bytes] in chunks (no single multi-megabyte JavaScript string) and
+  /// opens the book from the assembled upload.
+  Future<void> openFromBytes(
+    Uint8List bytes, {
+    String flow = 'paginated',
+    int? trialStart,
+    int? trialCount,
+    String? initialCfi,
+    int chunkSize = 512 * 1024,
+    bool Function()? isCancelled,
+  }) async {
+    if (bytes.length <= chunkSize) {
+      return openFromBase64(
+        base64Encode(bytes),
+        flow: flow,
+        trialStart: trialStart,
+        trialCount: trialCount,
+        initialCfi: initialCfi,
+      );
+    }
+    await requests.call('beginUpload');
+    for (var at = 0; at < bytes.length; at += chunkSize) {
+      if (isCancelled?.call() ?? false) return;
+      final end = at + chunkSize < bytes.length ? at + chunkSize : bytes.length;
+      await requests.call('appendChunk', [
+        base64Encode(Uint8List.sublistView(bytes, at, end)),
+      ]);
+    }
+    if (isCancelled?.call() ?? false) return;
+    await requests.call('openFromBase64', [
+      null,
+      flow,
+      trialStart,
+      trialCount,
+      initialCfi,
+    ]);
+  }
+
+  /// `rtl` forces right-to-left text and page progression; anything else keeps
+  /// the book's own direction.
+  Future<void> setDirection(String direction) async =>
+      requests.call('setDirection', [direction]);
+
   Future<void> next() async => requests.call('next');
   Future<void> prev() async => requests.call('prev');
   Future<void> display(String? target) async =>
@@ -119,9 +164,19 @@ class EpubBridge {
     return result is Map ? Map<String, dynamic>.from(result) : null;
   }
 
+  Future<String?> getLanguage() async {
+    final value = await requests.call('getLanguage');
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
   Future<String> getText() async => '${await requests.call('getText') ?? ''}';
   Future<void> setFontSize(double px) async =>
       requests.call('setFontSize', [((px / 18) * 100).clamp(50, 300).round()]);
+  Future<void> addFontFace(
+    String family,
+    String base64Data, {
+    String mime = 'font/ttf',
+  }) async => requests.call('addFontFace', [family, base64Data, mime]);
   Future<void> setFontFamily(String? family) async =>
       requests.call('setFontFamily', [family]);
   Future<void> setLineHeight(double height) async =>
@@ -136,6 +191,17 @@ class EpubBridge {
     required String background,
     required String foreground,
   }) async => requests.call('setTheme', [background, foreground]);
+}
+
+/// Guesses the font MIME type from its magic bytes (defaults to TrueType).
+String epubFontMimeType(List<int> bytes) {
+  if (bytes.length >= 4) {
+    final tag = String.fromCharCodes(bytes.take(4));
+    if (tag == 'wOFF') return 'font/woff';
+    if (tag == 'wOF2') return 'font/woff2';
+    if (tag == 'OTTO') return 'font/otf';
+  }
+  return 'font/ttf';
 }
 
 class EpubBridgeMessage {

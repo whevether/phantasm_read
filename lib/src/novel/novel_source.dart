@@ -24,16 +24,28 @@ sealed class NovelSource {
   factory NovelSource.epubAsset(String assetPath) =>
       NovelSourceData(NovelFormat.epub, NovelBytesSource.asset(assetPath));
   factory NovelSource.epubUrl(String url, {Map<String, String>? headers}) =>
-      NovelSourceData(NovelFormat.epub, NovelBytesSource.url(url, headers: headers));
+      NovelSourceData(
+        NovelFormat.epub,
+        NovelBytesSource.url(url, headers: headers),
+      );
   factory NovelSource.epubBytes(Uint8List bytes, {String name = 'book.epub'}) =>
-      NovelSourceData(NovelFormat.epub, NovelBytesSource.bytes(bytes, name: name));
+      NovelSourceData(
+        NovelFormat.epub,
+        NovelBytesSource.bytes(bytes, name: name),
+      );
 
   factory NovelSource.textAsset(String assetPath) =>
       NovelSourceData(NovelFormat.text, NovelBytesSource.asset(assetPath));
   factory NovelSource.textUrl(String url, {Map<String, String>? headers}) =>
-      NovelSourceData(NovelFormat.text, NovelBytesSource.url(url, headers: headers));
+      NovelSourceData(
+        NovelFormat.text,
+        NovelBytesSource.url(url, headers: headers),
+      );
   factory NovelSource.textBytes(Uint8List bytes, {String name = 'book.txt'}) =>
-      NovelSourceData(NovelFormat.text, NovelBytesSource.bytes(bytes, name: name));
+      NovelSourceData(
+        NovelFormat.text,
+        NovelBytesSource.bytes(bytes, name: name),
+      );
 
   factory NovelSource.markdownAsset(String assetPath) =>
       NovelSourceData(NovelFormat.markdown, NovelBytesSource.asset(assetPath));

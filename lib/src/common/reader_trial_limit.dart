@@ -90,6 +90,24 @@ class ReaderTrialLimit {
 
   /// Maps an absolute content index to a page-view logical index.
   int logicalIndex(int contentIndex) => contentIndex - startIndex;
+
+  /// Value equality so a host rebuild with an equal limit does not reopen the
+  /// book (EPUB re-encodes and reloads the whole file otherwise).
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReaderTrialLimit &&
+          other.maxCount == maxCount &&
+          other.startIndex == startIndex &&
+          other.unit == unit;
+
+  @override
+  int get hashCode => Object.hash(maxCount, startIndex, unit);
+
+  @override
+  String toString() =>
+      'ReaderTrialLimit(maxCount: $maxCount, startIndex: $startIndex, '
+      'unit: $unit)';
 }
 
 /// Payload delivered to [ReaderTrialLimitCallback].

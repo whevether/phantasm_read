@@ -25,11 +25,22 @@
     <div id="viewer"></div>
     <script>
       "use strict";
+      let uploadParts = [];
+      let direction = null;
+      function decodeBase64(base64) {
+        const binary = atob(base64),
+          bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      }
       let book = null,
         rendition = null,
         toc = [],
         flat = [],
-        flatBounds = [],
+        flatSection = [],
+        boundCache = new Map(),
+        fontFaces = new Map(),
+        relocSeq = 0,
         flow = "paginated",
         lastCfi = null;
       let trialStart = null,
@@ -59,24 +70,87 @@
           return null;
         }
       }
-      async function boundary(item) {
+      function safeDecode(value) {
+        try {
+          return decodeURIComponent(value);
+        } catch (_) {
+          return value;
+        }
+      }
+      // Resolves a TOC item to a section boundary. Returns null (never throws
+      // for a missing section/anchor) so callers can decide fail-open/closed.
+      async function boundary(item, useHash = true) {
         if (!item) return null;
         const section = sectionFor(item.href);
         if (!section) return null;
-        await section.load(book.load.bind(book));
-        const hash = item.href.split("#")[1];
-        const element = hash
-          ? section.document.getElementById(decodeURIComponent(hash))
-          : section.document.body;
-        if (!element) throw new Error("Unresolved chapter anchor");
-        const result = {
-          index: section.index,
-          hash: hash ? decodeURIComponent(hash) : null,
-          cfi: section.cfiFromElement(element),
-          href: item.href,
-        };
-        section.unload();
-        return result;
+        try {
+          await section.load(book.load.bind(book));
+          const raw = item.href.split("#")[1];
+          const hash = useHash && raw ? safeDecode(raw) : null;
+          const element = hash
+            ? section.document.getElementById(hash)
+            : section.document.body;
+          if (!element) return null;
+          return {
+            index: section.index,
+            hash,
+            cfi: section.cfiFromElement(element),
+            href: item.href,
+          };
+        } finally {
+          section.unload();
+        }
+      }
+      async function boundaryAt(i, useHash = true) {
+        const key = i + (useHash ? "#" : "");
+        if (!boundCache.has(key))
+          boundCache.set(
+            key,
+            await boundary(flat[i], useHash).catch(() => null),
+          );
+        return boundCache.get(key);
+      }
+      function sectionIndexOf(cfi) {
+        try {
+          const section = book.spine.get(cfi);
+          return section ? section.index : 0;
+        } catch (_) {
+          return 0;
+        }
+      }
+      // "../Text/c2.xhtml#a" relative to the current section -> spine href.
+      function resolveHref(baseHref, href) {
+        const u = new URL(
+          href,
+          "http://epub.invalid/" + String(baseHref).replace(/^\/+/, ""),
+        );
+        return safeDecode(u.pathname.replace(/^\//, "")) + u.hash;
+      }
+      function sanitizeFamily(family) {
+        return String(family || "")
+          .replace(/[\x00-\x1f\x7f"'\\<>{}();]/g, "")
+          .trim();
+      }
+      const GENERIC_FAMILIES = [
+        "serif",
+        "sans-serif",
+        "monospace",
+        "cursive",
+        "fantasy",
+        "system-ui",
+        "initial",
+      ];
+      function cssFamily(family) {
+        const name = sanitizeFamily(family);
+        if (!name) return "initial";
+        return GENERIC_FAMILIES.includes(name) ? name : '"' + name + '"';
+      }
+      function applyFonts(contents) {
+        if (!fontFaces.size) return;
+        const css = Array.from(fontFaces.values()).join("\n");
+        for (const c of contents ||
+          (rendition ? rendition.getContents() : []))
+          c.addStylesheetCss(css, "phantasm-fonts");
       }
       function compare(a, b) {
         return cfiUtil().compare(a, b);
@@ -133,10 +207,21 @@
           }
         }
       }
-      function chapterAt(cfi) {
+      // Chapter index for [cfi]. Only sections that share the spine item are
+      // resolved exactly, so no full-book scan is needed on open.
+      async function chapterAt(cfi) {
+        const idx = sectionIndexOf(cfi);
         let hit = 0;
-        for (let i = 0; i < flatBounds.length; i++)
-          if (flatBounds[i] && compare(cfi, flatBounds[i].cfi) >= 0) hit = i;
+        for (let i = 0; i < flat.length; i++) {
+          const s = flatSection[i];
+          if (s < 0 || s > idx) continue;
+          if (s < idx) {
+            hit = i;
+            continue;
+          }
+          const b = await boundaryAt(i);
+          if (b && compare(cfi, b.cfi) >= 0) hit = i;
+        }
         return hit;
       }
       function wireContents(contents) {
@@ -177,12 +262,17 @@
           if (!a) return;
           e.preventDefault();
           const href = a.getAttribute("href");
-          if (/^(?:https?:|mailto:|javascript:|data:)/i.test(href)) return;
+          if (!href || /^(?:[a-z][a-z0-9+.-]*:)/i.test(href)) return;
+          let target = href;
+          try {
+            const current = book.spine.get(contents.sectionIndex);
+            if (current) target = resolveHref(current.href, href);
+          } catch (_) {
+            /* Fall back to the raw href. */
+          }
           bridge
-            .display(
-              href.startsWith("#") ? book.spine.get(index).href + href : href,
-            )
-            .catch((error) => post("error", { message: String(error) }));
+            .display(target)
+            .catch((error) => post("warning", { message: String(error) }));
         });
       }
       let fontSize = 100;
@@ -197,8 +287,10 @@
           allowScriptedContent: false,
           allowPopups: false,
         });
+        if (direction) rendition.direction(direction);
         rendition.hooks.content.register(wireContents);
-        rendition.on("relocated", (location) => {
+        rendition.hooks.content.register((contents) => applyFonts([contents]));
+        rendition.on("relocated", async (location) => {
           const start = location && location.start;
           if (!start) return;
           if (!allowed(start.cfi)) {
@@ -207,14 +299,17 @@
             post("trialBoundary", { next });
             rendition
               .display(lastCfi || (startBoundary && startBoundary.href))
-              .catch((error) => post("error", { message: String(error) }));
+              .catch((error) => post("warning", { message: String(error) }));
             return;
           }
           lastCfi = start.cfi;
+          const seq = ++relocSeq;
+          const chapterIndex = await chapterAt(start.cfi);
+          if (seq !== relocSeq) return;
           const total = book.spine.length || 1;
           post("locationChanged", {
             cfi: start.cfi,
-            chapterIndex: chapterAt(start.cfi),
+            chapterIndex,
             percentage:
               typeof start.percentage === "number"
                 ? start.percentage
@@ -249,6 +344,14 @@
                 }),
             );
         },
+        beginUpload() {
+          uploadParts = [];
+        },
+        appendChunk(base64) {
+          if (!/^[A-Za-z0-9+/]*={0,2}$/.test(String(base64)))
+            throw new Error("Invalid EPUB chunk");
+          uploadParts.push(decodeBase64(base64));
+        },
         async openFromBase64(base64, newFlow, start, count, initialCfi) {
           const version = ++opening;
           flow = newFlow || "paginated";
@@ -260,25 +363,54 @@
           }
           if (book) book.destroy();
           lastCfi = null;
-          const binary = atob(base64),
-            bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++)
-            bytes[i] = binary.charCodeAt(i);
+          let bytes;
+          if (base64 == null) {
+            // Chunked upload (beginUpload/appendChunk): avoids one huge string.
+            let total = 0;
+            for (const part of uploadParts) total += part.length;
+            bytes = new Uint8Array(total);
+            let at = 0;
+            for (const part of uploadParts) {
+              bytes.set(part, at);
+              at += part.length;
+            }
+            uploadParts = [];
+          } else {
+            bytes = decodeBase64(base64);
+          }
           book = ePub(bytes.buffer);
           await book.ready;
           const nav = await book.loaded.navigation;
           if (version !== opening) return;
           toc = nav.toc || [];
           flat = flatten(toc);
-          flatBounds = [];
-          for (const item of flat) flatBounds.push(await boundary(item));
+          flatSection = flat.map((item) => {
+            const section = sectionFor(item.href);
+            return section ? section.index : -1;
+          });
+          boundCache = new Map();
           startBoundary = null;
           endBoundary = null;
+          // Boundaries are resolved only for the trial window edges, and fail
+          // closed: when an edge cannot be resolved we never expose more.
           if (count != null && count > 0) {
             if (!flat.length || start < 0 || start >= flat.length)
               throw new Error("No readable chapters in trial window");
-            startBoundary = flatBounds[start];
-            endBoundary = flatBounds[start + count] || null;
+            for (let i = start; i < flat.length && !startBoundary; i++)
+              startBoundary = await boundaryAt(i);
+            if (!startBoundary)
+              throw new Error("Cannot resolve the trial start chapter");
+            const endIndex = start + count;
+            if (endIndex < flat.length) {
+              for (let i = endIndex; i < flat.length && !endBoundary; i++)
+                endBoundary =
+                  (await boundaryAt(i)) || (await boundaryAt(i, false));
+              if (!endBoundary)
+                throw new Error("Cannot resolve the trial end chapter");
+              if (compare(startBoundary.cfi, endBoundary.cfi) >= 0)
+                throw new Error("No readable chapters in trial window");
+            }
+            if (version !== opening) return;
           }
           const target = initialCfi && allowed(initialCfi) ? initialCfi : null;
           await makeRendition(target);
@@ -299,12 +431,18 @@
               });
               return;
             }
-          } else if (target) {
-            const b = await boundary({ href: target });
-            if (!b || !allowed(b.cfi)) {
+          } else if (target && (startBoundary || endBoundary)) {
+            const b =
+              (await boundary({ href: target })) ||
+              (await boundary({ href: target }, false));
+            if (!b) {
+              // Not a spine document (dead link): not a trial boundary.
+              post("warning", { message: "Unresolved link: " + target });
+              return;
+            }
+            if (!allowed(b.cfi)) {
               post("trialBoundary", {
-                next:
-                  !b || (!!endBoundary && compare(b.cfi, endBoundary.cfi) >= 0),
+                next: !!endBoundary && compare(b.cfi, endBoundary.cfi) >= 0,
               });
               return;
             }
@@ -319,6 +457,10 @@
           return loc && loc.start
             ? { cfi: loc.start.cfi, percentage: loc.start.percentage }
             : null;
+        },
+        setDirection(value) {
+          direction = value === "rtl" ? "rtl" : null;
+          if (rendition && direction) rendition.direction(direction);
         },
         async setFlow(value) {
           flow = value === "scrolled" ? "scrolled" : "paginated";
@@ -343,6 +485,10 @@
           }
           return hits;
         },
+        getLanguage() {
+          const meta = book && book.packaging && book.packaging.metadata;
+          return (meta && meta.language) || null;
+        },
         getText() {
           return rendition
             ? rendition
@@ -360,8 +506,28 @@
           fontSize = percent;
           if (rendition) rendition.themes.fontSize(percent + "%");
         },
+        addFontFace(family, base64, mime) {
+          const name = sanitizeFamily(family);
+          if (!name) throw new Error("Invalid font family");
+          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(base64)))
+            throw new Error("Invalid font data");
+          const type = /^font\/(?:ttf|otf|woff2?)$/.test(String(mime))
+            ? mime
+            : "font/ttf";
+          fontFaces.set(
+            name,
+            '@font-face{font-family:"' +
+              name +
+              '";src:url(data:' +
+              type +
+              ";base64," +
+              base64 +
+              ");}",
+          );
+          applyFonts();
+        },
         setFontFamily(family) {
-          if (rendition) rendition.themes.font(family || "initial");
+          if (rendition) rendition.themes.font(cssFamily(family));
         },
         setLineHeight(value) {
           if (rendition)
