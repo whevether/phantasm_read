@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../../common/reader_swipe_physics.dart';
+
 import '../../common/novel_reading_mode.dart';
 import '../../common/novel_typography.dart';
 import '../../common/page_curl.dart';
@@ -29,6 +31,8 @@ class TextReader extends StatefulWidget {
     this.initialTextOffset = 0,
     this.onParagraphChanged,
     this.highlightParagraphs = const {},
+    this.highlightColors = const {},
+    this.swipeSensitivity = 1.0,
     this.rtl = false,
     this.pageTurnEffect = PageTurnEffect.curl,
     this.minParagraphIndex,
@@ -52,6 +56,12 @@ class TextReader extends StatefulWidget {
   final int initialTextOffset;
   final ValueChanged<int>? onParagraphChanged;
   final Set<int> highlightParagraphs;
+
+  /// Per-paragraph highlight colors (take precedence over [highlightParagraphs]).
+  final Map<int, Color> highlightColors;
+
+  /// Page-swipe sensitivity (see `ReaderSettings.swipeSensitivity`).
+  final double swipeSensitivity;
   final bool rtl;
   final PageTurnEffect pageTurnEffect;
   final int? minParagraphIndex;
@@ -508,6 +518,16 @@ class TextReaderState extends State<TextReader> {
     );
   }
 
+  /// Background for a paragraph: its own highlight color, the default yellow
+  /// for plain highlighted/karaoke paragraphs, otherwise transparent.
+  Color _highlightFor(int paragraph) {
+    final own = widget.highlightColors[paragraph];
+    if (own != null) return own.withValues(alpha: 0.4);
+    return widget.highlightParagraphs.contains(paragraph)
+        ? const Color(0x66FFEB3B)
+        : Colors.transparent;
+  }
+
   TextAlign get _align => widget.typography.textAlign == TextAlignOption.justify
       ? TextAlign.justify
       : TextAlign.start;
@@ -529,13 +549,8 @@ class TextReaderState extends State<TextReader> {
               for (var j = 0; j < _pages[index].length; j++) ...[
                 if (j > 0) SizedBox(height: widget.typography.fontSize * 0.8),
                 ColoredBox(
-                  color:
-                      widget.highlightParagraphs.contains(
-                        _pages[index][j].paragraphIndex,
-                      )
-                      ? const Color(0x66FFEB3B)
-                      : Colors.transparent,
-                  child: Text(
+                  color: _highlightFor(_pages[index][j].paragraphIndex),
+                  child: SelectableText(
                     _pages[index][j].text,
                     style: style,
                     textAlign: _align,
@@ -628,6 +643,7 @@ class TextReaderState extends State<TextReader> {
                     key: ValueKey(Object.hash(pageCount, _layoutSize)),
                     controller: _pageController,
                     reverse: widget.rtl,
+                    physics: readerSwipePhysics(widget.swipeSensitivity),
                     effect: widget.pageTurnEffect,
                     itemCount: pageCount,
                     onPageChanged: (page) {
@@ -701,9 +717,7 @@ class TextReaderState extends State<TextReader> {
                           bottom: widget.typography.fontSize * 0.8,
                         ),
                         child: ColoredBox(
-                          color: widget.highlightParagraphs.contains(index)
-                              ? const Color(0x66FFEB3B)
-                              : Colors.transparent,
+                          color: _highlightFor(index),
                           child: SelectableText(
                             book.paragraphs[index],
                             style: style,

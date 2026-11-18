@@ -207,6 +207,28 @@ class ReaderBookmarkStore {
         ]);
       });
 
+  /// Changes the color (ARGB) of a highlight.
+  Future<void> updateHighlightColor(String bookId, String id, int color) =>
+      _lock.synchronized(() async {
+        final list = await listHighlights(bookId);
+        await _saveHighlights(bookId, [
+          for (final h in list)
+            if (h.id == id)
+              ReaderHighlight(
+                id: h.id,
+                bookId: h.bookId,
+                excerpt: h.excerpt,
+                cfi: h.cfi,
+                paragraphIndex: h.paragraphIndex,
+                color: color,
+                note: h.note,
+                createdAt: h.createdAt,
+              )
+            else
+              h,
+        ]);
+      });
+
   Future<void> removeHighlight(String bookId, String id) =>
       _lock.synchronized(() async {
         final list = await listHighlights(bookId);

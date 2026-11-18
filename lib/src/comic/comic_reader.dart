@@ -16,6 +16,7 @@ import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
 import '../common/reader_stats.dart';
 import '../common/reader_strings.dart';
+import '../common/reader_swipe_physics.dart';
 import '../common/reader_trial_limit.dart';
 import '../common/reader_page_window.dart';
 import '../common/page_reader_toolbar.dart';
@@ -52,6 +53,8 @@ class ComicReader extends StatefulWidget {
     this.onSync,
     this.showToolbar = true,
     this.onNextChapterRequested,
+    this.webtoonGap = 0,
+    this.webtoonCacheExtent,
     this.onStats,
     this.strings = ReaderStrings.auto,
   });
@@ -65,6 +68,13 @@ class ComicReader extends StatefulWidget {
   /// Called when the user tries to go past the last page and the content is
   /// not trial-limited. The host may swap in the next chapter's pages.
   final VoidCallback? onNextChapterRequested;
+
+  /// Webtoon mode: empty space between pages (logical pixels).
+  final double webtoonGap;
+
+  /// Webtoon mode: how far beyond the viewport pages are built and preloaded
+  /// (logical pixels). `null` keeps the framework default.
+  final double? webtoonCacheExtent;
 
   final ComicPages pages;
   final String? bookId;
@@ -753,6 +763,8 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
                             key: ValueKey('webtoon-$_bookId'),
                             count: _window.visible,
                             initialIndex: _currentPage,
+                            gap: widget.webtoonGap,
+                            cacheExtent: widget.webtoonCacheExtent,
                             controller: _webtoon,
                             onReachedEnd: () {
                               if (_hasMoreBeyondTrial) {
@@ -814,6 +826,9 @@ class _ComicReaderState extends State<ComicReader> with WidgetsBindingObserver {
                             ),
                             itemCount: _pageViewCount,
                             controller: controller,
+                            physics: readerSwipePhysics(
+                              _settings.swipeSensitivity,
+                            ),
                             scrollDirection: _mode == ComicReadingMode.vertical
                                 ? Axis.vertical
                                 : Axis.horizontal,

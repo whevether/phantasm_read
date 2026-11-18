@@ -151,7 +151,7 @@ ComicReader(
 ### 文本（txt / md / html）
 
 - 编码：默认 UTF-8，失败回退 GBK / GB18030；也可指定 `encoding`
-- HTML 去标签；Markdown 轻量剥格式
+- HTML 去标签；Markdown 展平为可读文本（链接/图片保留文字、列表加圆点、引用/代码围栏/分隔线/表格/下划线式标题去掉语法）
 - 竖读：`CustomScrollView` + 可选中文本
 - 横读：段落分页 + `PageView`（支持 `rtl`）
 - 章节启发式识别：`第×章` / `Chapter N` / `# 标题`
@@ -161,7 +161,10 @@ ComicReader(
 ### 导航、排版与工具栏
 
 - 上一 / 下一章、上一 / 下一页、章节树、全文搜索
-- 书签（CFI 或段落索引）、高亮（段落摘录入库；文本路径有黄底）
+- 书签（CFI 或段落索引）；高亮支持 5 种颜色和可选笔记（文本：整段；EPUB：精确到选中范围并在书中绘制）；在列表中长按高亮、或在 EPUB 中点按高亮，可改色 / 编辑笔记 / 复制 / 删除
+- 复制选中文字（文本格式与 EPUB）；在 EPUB 中选中文字会弹出 复制 / 笔记 / 颜色 面板
+- EPUB：点按图片打开全屏查看器（双指缩放、拖动、双击缩放、单击关闭）
+- 滑动灵敏度滑块（`ReaderSettings.swipeSensitivity`，0.5–2.0），对漫画、小说、PDF 翻页生效
 - 字号 / 行距 / 边距 / 字距 / 左齐↔两端对齐
 - 字体芯片：`NovelFontOption.defaults`（系统 / Serif / Sans / Mono）
 - 主题预设：`NovelThemePreset.defaults`（Cream / White / Sepia / Green / Dark / AMOLED）
@@ -375,7 +378,10 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | TTS | 文本路径朗读当前段，EPUB 朗读当前可见页文字；长文本分段朗读。可设 `NovelReader.ttsLanguage`（引擎需实现 `NovelTtsLanguageAware`），EPUB 默认取 `dc:language` |
 | 自动滚屏 | 文本路径与 EPUB 均支持（EPUB 竖读为连续滚动，横读为定时翻页） |
 | Media Overlay → EPUB | karaoke 按段落跳转，不跟 CFI |
-| 小说书签 / 高亮列表 UI | 可增删入库；无独立列表页（漫画有书签列表） |
+| 小说书签 / 高亮列表 UI | 书签面板同时列出书签与高亮（含笔记）；长按高亮可编辑 |
+| EPUB 高亮 | 以 CFI 范围保存；旧版本保存的单点 CFI 高亮会出现在列表里但不会在书中绘制 |
+| 滑动灵敏度 | `ReaderSettings.swipeSensitivity` 缩放翻页拖动距离与 fling 阈值；条漫滚动不受影响 |
+| 条漫间距 | `ComicReader.webtoonGap`（页间距）与 `webtoonCacheExtent`（预加载距离） |
 | 墨迹批注 | `enableInk`；工具栏有撤销/清空；按书籍与位置保存（`ReaderInk`） |
 | PDF 大文件 | 逐页光栅化，页数多 / `rasterDpi` 高时内存与耗时增加 |
 | Android PDF | 系统 `PdfRenderer` 需 **PDF 1.7+**、未加密；低版本或手写 PDF 可能无法渲染 |

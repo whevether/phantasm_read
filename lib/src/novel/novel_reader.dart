@@ -32,6 +32,15 @@ import 'novel_search.dart';
 import 'novel_source.dart';
 import 'text/text_reader.dart';
 
+/// Highlight colors offered when selecting text (first = default yellow).
+const _highlightPalette = <Color>[
+  Color(0xFFFFEB3B),
+  Color(0xFF81C784),
+  Color(0xFF64B5F6),
+  Color(0xFFF48FB1),
+  Color(0xFFFFB74D),
+];
+
 /// Novel reader for EPUB and common text formats.
 class NovelReader extends StatefulWidget {
   const NovelReader({
@@ -773,8 +782,10 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                       tooltip: _strings.delete,
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () async {
-                        await ReaderBookmarkStore.instance
-                            .removeBookmark(_bookId, b.id);
+                        await ReaderBookmarkStore.instance.removeBookmark(
+                          _bookId,
+                          b.id,
+                        );
                         _bookmarks = await ReaderBookmarkStore.instance
                             .listBookmarks(_bookId);
                         if (sheetContext.mounted) Navigator.pop(sheetContext);
@@ -794,16 +805,29 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    subtitle: h.note == null || h.note!.isEmpty
+                        ? null
+                        : Text(
+                            h.note!,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                     onTap: () {
                       Navigator.pop(sheetContext);
                       jump(h.cfi, h.paragraphIndex);
+                    },
+                    onLongPress: () {
+                      Navigator.pop(sheetContext);
+                      _openHighlightSheet(h);
                     },
                     trailing: IconButton(
                       tooltip: _strings.delete,
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () async {
-                        await ReaderBookmarkStore.instance
-                            .removeHighlight(_bookId, h.id);
+                        await ReaderBookmarkStore.instance.removeHighlight(
+                          _bookId,
+                          h.id,
+                        );
                         _highlights = await ReaderBookmarkStore.instance
                             .listHighlights(_bookId);
                         if (sheetContext.mounted) Navigator.pop(sheetContext);
@@ -910,19 +934,50 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     }
   }
 
+  /// Toolbar highlight button. EPUB highlights the text currently selected in
+  /// the book; text formats highlight the paragraph being read.
   Future<void> _addHighlight() async {
     if (!widget.enableHighlights || _recordBusy || !_currentLocationReadable) {
       return;
     }
+    if (_isEpub) {
+      final selection = _epubSelection;
+      if (selection == null) {
+        _toast(_strings.selectTextFirst);
+        return;
+      }
+      await _openSelectionSheet(selection);
+      return;
+    }
     final paras = _textKey.currentState?.paragraphs;
-    final excerpt = _isEpub
-        ? (_cfi ?? '')
-        : (paras != null &&
-                  _paragraphIndex >= 0 &&
-                  _paragraphIndex < paras.length
-              ? paras[_paragraphIndex]
-              : '');
+    final excerpt =
+        paras != null && _paragraphIndex >= 0 && _paragraphIndex < paras.length
+        ? paras[_paragraphIndex]
+        : '';
     if (excerpt.isEmpty) return;
+    await _openSelectionSheet(
+      EpubSelection(cfi: '', text: excerpt),
+      paragraph: _paragraphIndex,
+    );
+  }
+
+  /// Last text selection reported by the EPUB view (cleared when handled).
+  EpubSelection? _epubSelection;
+
+  void _onEpubSelection(EpubSelection selection) {
+    if (!mounted || !_currentLocationReadable) return;
+    _epubSelection = selection;
+    _openSelectionSheet(selection);
+  }
+
+  Future<void> _saveHighlight({
+    required String excerpt,
+    String? cfi,
+    int? paragraph,
+    required Color color,
+    String? note,
+  }) async {
+    if (_recordBusy) return;
     _recordBusy = true;
     try {
       await ReaderBookmarkStore.instance.addHighlight(
@@ -930,8 +985,10 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
           id: readerRecordId(),
           bookId: _bookId,
           excerpt: excerpt.length > 120 ? excerpt.substring(0, 120) : excerpt,
-          cfi: _isEpub ? _cfi : null,
-          paragraphIndex: _isEpub ? null : _paragraphIndex,
+          cfi: cfi,
+          paragraphIndex: paragraph,
+          color: color.toARGB32(),
+          note: (note == null || note.isEmpty) ? null : note,
         ),
       );
       _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
@@ -939,6 +996,237 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     } finally {
       _recordBusy = false;
     }
+  }
+
+  Future<void> _copyText(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    _toast(_strings.copied);
+  }
+
+  /// Short message; hosts without a [Scaffold] simply get none.
+  void _toast(String message) {
+    if (!mounted) return;
+    try {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+    } on Object catch (e) {
+      debugPrint('NovelReader: cannot show message: $e');
+    }
+  }
+
+  Future<String?> _promptNote({String? initial}) {
+    final controller = TextEditingController(text: initial ?? '');
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(_strings.note),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 1,
+          maxLines: 5,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(_strings.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: Text(_strings.save),
+          ),
+        ],
+      ),
+    ).whenComplete(controller.dispose);
+  }
+
+  Widget _colorChips(
+    BuildContext sheetContext,
+    ValueChanged<Color> onPick, {
+    int? selected,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        for (final c in _highlightPalette)
+          Semantics(
+            button: true,
+            label: _strings.highlight,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => onPick(c),
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: c,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    width: selected == c.toARGB32() ? 3 : 1,
+                    color: Theme.of(sheetContext).colorScheme.outline,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Copy / highlight (5 colors) / note for a selected range or paragraph.
+  Future<void> _openSelectionSheet(
+    EpubSelection selection, {
+    int? paragraph,
+  }) async {
+    final highlightable = widget.enableHighlights;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                selection.text,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.copy),
+                    label: Text(_strings.copy),
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _copyText(selection.text);
+                    },
+                  ),
+                  if (highlightable)
+                    TextButton.icon(
+                      icon: const Icon(Icons.edit_note),
+                      label: Text(_strings.note),
+                      onPressed: () async {
+                        Navigator.pop(sheetContext);
+                        final note = await _promptNote();
+                        if (note == null) return;
+                        await _saveHighlight(
+                          excerpt: selection.text,
+                          cfi: paragraph == null ? selection.cfi : null,
+                          paragraph: paragraph,
+                          color: _highlightPalette.first,
+                          note: note,
+                        );
+                      },
+                    ),
+                ],
+              ),
+              if (highlightable) ...[
+                const SizedBox(height: 8),
+                _colorChips(sheetContext, (color) async {
+                  Navigator.pop(sheetContext);
+                  await _saveHighlight(
+                    excerpt: selection.text,
+                    cfi: paragraph == null ? selection.cfi : null,
+                    paragraph: paragraph,
+                    color: color,
+                  );
+                }),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    _epubSelection = null;
+    if (_isEpub) _epubController.clearSelection().catchError((Object _) {});
+  }
+
+  /// Sheet for an existing highlight: copy, note, recolor, delete.
+  Future<void> _openHighlightSheet(ReaderHighlight h) async {
+    Future<void> reload() async {
+      _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+      if (mounted) setState(() {});
+    }
+
+    final isLocation = h.excerpt.startsWith('epubcfi(');
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (!isLocation)
+                Text(h.excerpt, maxLines: 4, overflow: TextOverflow.ellipsis),
+              if (h.note != null && h.note!.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  h.note!,
+                  style: const TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (!isLocation)
+                    TextButton.icon(
+                      icon: const Icon(Icons.copy),
+                      label: Text(_strings.copy),
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        _copyText(h.excerpt);
+                      },
+                    ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit_note),
+                    label: Text(_strings.note),
+                    onPressed: () async {
+                      Navigator.pop(sheetContext);
+                      final note = await _promptNote(initial: h.note);
+                      if (note == null) return;
+                      await ReaderBookmarkStore.instance.updateHighlightNote(
+                        _bookId,
+                        h.id,
+                        note,
+                      );
+                      await reload();
+                    },
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.delete_outline),
+                    label: Text(_strings.delete),
+                    onPressed: () async {
+                      Navigator.pop(sheetContext);
+                      await ReaderBookmarkStore.instance.removeHighlight(
+                        _bookId,
+                        h.id,
+                      );
+                      await reload();
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _colorChips(sheetContext, (color) async {
+                Navigator.pop(sheetContext);
+                await ReaderBookmarkStore.instance.updateHighlightColor(
+                  _bookId,
+                  h.id,
+                  color.toARGB32(),
+                );
+                await reload();
+              }, selected: h.color),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _toggleAutoScroll() {
@@ -1124,6 +1412,19 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
         },
         onChaptersLoaded: _onChapters,
         onFontSizeChanged: _onFontSizeChanged,
+        highlights: [
+          for (final h in _highlights)
+            // Range CFIs only (legacy highlights stored a single point).
+            if (h.cfi != null &&
+                h.cfi!.startsWith('epubcfi(') &&
+                h.cfi!.contains(','))
+              EpubHighlightMark(id: h.id, cfi: h.cfi!, color: Color(h.color)),
+        ],
+        onTextSelected: _onEpubSelection,
+        onHighlightTapped: (id) {
+          final matches = _highlights.where((h) => h.id == id);
+          if (matches.isNotEmpty) _openHighlightSheet(matches.first);
+        },
       );
     }
 
@@ -1142,10 +1443,11 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       initialTextOffset: _restoredTextOffset,
       minParagraphIndex: _trialMinParagraphIndex,
       maxParagraphIndex: _trialMaxParagraphIndex,
-      highlightParagraphs: {
+      swipeSensitivity: _settings.swipeSensitivity,
+      highlightParagraphs: {?_karaokeParagraph},
+      highlightColors: {
         for (final h in _highlights)
-          if (h.paragraphIndex != null) h.paragraphIndex!,
-        ?_karaokeParagraph,
+          if (h.paragraphIndex != null) h.paragraphIndex!: Color(h.color),
       },
       rtl: widget.rtl,
       pageTurnEffect: widget.pageTurnEffect,
@@ -1669,6 +1971,35 @@ class _NovelToolbar extends StatelessWidget {
                             settings.copyWith(
                               typography: t.copyWith(pageMargin: v),
                             ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 72),
+                        child: Text(
+                          strings.swipeSensitivity,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          min: 0.5,
+                          max: 2.0,
+                          value: settings.swipeSensitivity.clamp(0.5, 2.0),
+                          label: settings.swipeSensitivity.toStringAsFixed(1),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.swipeSensitivity} ${v.toStringAsFixed(1)}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(swipeSensitivity: v),
                           ),
                         ),
                       ),

@@ -17,6 +17,7 @@ import '../common/reader_settings_store.dart';
 import '../common/reader_sync.dart';
 import '../common/reader_stats.dart';
 import '../common/reader_strings.dart';
+import '../common/reader_swipe_physics.dart';
 import '../common/reader_trial_limit.dart';
 import '../common/reader_identity.dart';
 import '../common/reader_page_window.dart';
@@ -764,6 +765,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
                         '${widget.rtl}-$_pageViewCount',
                       ),
                       controller: controller,
+                      physics: readerSwipePhysics(_settings.swipeSensitivity),
                       itemCount: _pageViewCount,
                       scrollDirection: _mode == ComicReadingMode.vertical
                           ? Axis.vertical

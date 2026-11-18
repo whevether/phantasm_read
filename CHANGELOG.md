@@ -7,6 +7,10 @@ Trial protection, data safety and packaging
 * Packaging: signing files (`key.properties`, `*.jks`) are no longer tracked, the example falls back to debug signing without `key.properties` (see `example/android/key.properties.example`), pinned dependencies became `^` ranges, `unorm_dart` was added and `.pubignore` keeps examples/docs/tests out of the package.
 
 New features
+* Highlights: 5 colors, notes, exact EPUB ranges drawn in the book, recolor/edit/copy/delete; copy selected text (text and EPUB); EPUB image zoom viewer.
+* `ReaderSettings.swipeSensitivity` (0.5-2.0) with a slider in the comic/PDF toolbar and the novel settings panel; `ComicReader.webtoonGap` / `webtoonCacheExtent`.
+* Better Markdown flattening (links, images, lists, quotes, fences, rules, tables, setext headings); horizontal text pages are now selectable.
+* New strings: `copy`, `copied`, `note`, `save`, `selectTextFirst`, `swipeSensitivity` (all presets).
 * EPUB auto-scroll (continuous scrolling in vertical mode, timed page turns in horizontal mode) and a CSP meta tag in the EPUB reader page.
 * Volume-key paging (`ReaderSettings.volumeKeyPaging`, off by default), `ReaderStats`/`ReaderStatsTracker` with `onStats` on `ComicReader`, `NovelReader` and `PdfReader`, `ReaderSyncConflictPolicy`, `ReaderBookmarkStore.updateHighlightNote`, `ComicReader.onNextChapterRequested`, `loadReaderCustomFont` and `ChineseTextConverter` (character-level, common characters only).
 * Southeast Asian UI presets `ReaderStrings.th` / `vi` / `id` / `ms` / `fil` with `ReaderStrings.forLocale` / `forLanguageCode`.

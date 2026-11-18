@@ -126,6 +126,24 @@ class PageReaderToolbar extends StatelessWidget {
                       ),
                     ],
                   ),
+                  Row(
+                    children: [
+                      const Icon(Icons.swipe, color: Colors.white, size: 18),
+                      Expanded(
+                        child: Slider(
+                          min: 0.5,
+                          max: 2.0,
+                          value: settings.swipeSensitivity.clamp(0.5, 2.0),
+                          label: settings.swipeSensitivity.toStringAsFixed(1),
+                          semanticFormatterCallback: (v) =>
+                              '${strings.swipeSensitivity} ${v.toStringAsFixed(1)}',
+                          onChanged: (v) => onSettingsChanged(
+                            settings.copyWith(swipeSensitivity: v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(

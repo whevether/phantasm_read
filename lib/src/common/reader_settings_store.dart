@@ -73,6 +73,7 @@ class ReaderSettingsStore {
     'immersive': s.immersive,
     'volumeKeyPaging': s.volumeKeyPaging,
     'comicAutoCrop': s.comicAutoCrop,
+    'swipeSensitivity': s.swipeSensitivity,
   };
 
   ReaderSettings _fromJson(Map<String, dynamic> json) {
@@ -106,6 +107,7 @@ class ReaderSettingsStore {
       immersive: json['immersive'] as bool? ?? true,
       volumeKeyPaging: json['volumeKeyPaging'] as bool? ?? false,
       comicAutoCrop: json['comicAutoCrop'] as bool? ?? false,
+      swipeSensitivity: _number(json['swipeSensitivity'], 1.0, 0.5, 2.0),
     );
   }
 }

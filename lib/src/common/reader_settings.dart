@@ -17,7 +17,9 @@ class ReaderSettings {
     this.immersive = true,
     this.volumeKeyPaging = false,
     this.comicAutoCrop = false,
-  }) : assert(brightness >= 0 && brightness <= 1);
+    this.swipeSensitivity = 1.0,
+  }) : assert(brightness >= 0 && brightness <= 1),
+       assert(swipeSensitivity >= 0.5 && swipeSensitivity <= 2.0);
 
   final double brightness;
   final bool keepScreenOn;
@@ -41,6 +43,10 @@ class ReaderSettings {
   /// Trim near-uniform margins from comic pages (off by default).
   final bool comicAutoCrop;
 
+  /// Page-swipe sensitivity, 0.5 (needs a longer drag) to 2.0 (flips on a
+  /// short drag). 1.0 is the framework default.
+  final double swipeSensitivity;
+
   ReaderSettings copyWith({
     double? brightness,
     bool? keepScreenOn,
@@ -55,6 +61,7 @@ class ReaderSettings {
     bool? immersive,
     bool? volumeKeyPaging,
     bool? comicAutoCrop,
+    double? swipeSensitivity,
     bool clearBackgroundColor = false,
     bool clearForegroundColor = false,
   }) {
@@ -76,6 +83,7 @@ class ReaderSettings {
       immersive: immersive ?? this.immersive,
       volumeKeyPaging: volumeKeyPaging ?? this.volumeKeyPaging,
       comicAutoCrop: comicAutoCrop ?? this.comicAutoCrop,
+      swipeSensitivity: swipeSensitivity ?? this.swipeSensitivity,
     );
   }
 
@@ -96,7 +104,8 @@ class ReaderSettings {
           other.tapZonesEnabled == tapZonesEnabled &&
           other.immersive == immersive &&
           other.volumeKeyPaging == volumeKeyPaging &&
-          other.comicAutoCrop == comicAutoCrop;
+          other.comicAutoCrop == comicAutoCrop &&
+          other.swipeSensitivity == swipeSensitivity;
 
   @override
   int get hashCode => Object.hash(
@@ -114,6 +123,7 @@ class ReaderSettings {
     immersive,
     volumeKeyPaging,
     comicAutoCrop,
+    swipeSensitivity,
   );
 }
 

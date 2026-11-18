@@ -342,11 +342,71 @@ class NovelTextDecoder {
     return headings.where((e) => e.isNotEmpty).toList();
   }
 
-  String _plain(String value) => value
+  String _plain(String value) => _markdownInline(value).trim();
+
+  /// Inline markdown -> plain text: images become their alt text, links their
+  /// label, and bold / italic / strike / code lose their markers.
+  static String _markdownInline(String value) => value
+      .replaceAllMapped(RegExp(r'!\[([^\]]*)\]\([^)]*\)'), (m) => m[1]!)
+      .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]*\)'), (m) => m[1]!)
+      .replaceAllMapped(RegExp(r'<(https?://[^>\s]+)>'), (m) => m[1]!)
       .replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'), (m) => m[1]!)
+      .replaceAllMapped(RegExp(r'(?<![\w])__(.+?)__(?![\w])'), (m) => m[1]!)
+      .replaceAllMapped(RegExp(r'~~(.+?)~~'), (m) => m[1]!)
       .replaceAllMapped(RegExp(r'\*(.+?)\*'), (m) => m[1]!)
-      .replaceAllMapped(RegExp(r'`(.+?)`'), (m) => m[1]!)
-      .trim();
+      .replaceAllMapped(RegExp(r'(?<![\w])_(.+?)_(?![\w])'), (m) => m[1]!)
+      .replaceAllMapped(RegExp(r'`(.+?)`'), (m) => m[1]!);
+
+  /// Block-level markdown -> plain text lines: fences, rules, quotes, lists,
+  /// setext underlines and tables lose their syntax; list items get a bullet.
+  static String _markdownBlocks(String raw) {
+    final out = <String>[];
+    var inFence = false;
+    final lines = raw.replaceAll('\r\n', '\n').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      final trimmed = line.trim();
+      if (RegExp(r'^(```|~~~)').hasMatch(trimmed)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) {
+        out.add(line);
+        continue;
+      }
+      // Setext heading underline (=== / ---) directly below a text line.
+      if (RegExp(r'^(=+|-+)$').hasMatch(trimmed) &&
+          out.isNotEmpty &&
+          out.last.trim().isNotEmpty &&
+          trimmed.length >= 2 &&
+          (i == 0 || lines[i - 1].trim().isNotEmpty)) {
+        continue;
+      }
+      // Horizontal rules.
+      if (RegExp(r'^([-*_])(\s*\1){2,}$').hasMatch(trimmed)) {
+        continue;
+      }
+      // Table separator rows (| --- | :---: |).
+      if (RegExp(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$')
+              .hasMatch(trimmed) &&
+          trimmed.contains('|')) {
+        continue;
+      }
+      line = line.replaceFirst(RegExp(r'^\s{0,3}#{1,6}[ \t]*'), '');
+      line = line.replaceFirst(RegExp(r'^\s*>+[ \t]?'), '');
+      line = line.replaceFirstMapped(
+        RegExp(r'^(\s*)[-*+][ \t]+(?:\[[ xX]\][ \t]+)?'),
+        (m) => '${m[1]}\u2022 ',
+      );
+      if (line.contains('|') && trimmed.startsWith('|')) {
+        line = line
+            .replaceAll(RegExp(r'^\s*\|\s*|\s*\|\s*$'), '')
+            .replaceAll(RegExp(r'\s*\|\s*'), '  ');
+      }
+      out.add(line);
+    }
+    return out.join('\n');
+  }
 
   /// Strip tags for html; light markdown normalization for md.
   String normalizeContent(String raw, {required String kind}) {
@@ -373,11 +433,8 @@ class NovelTextDecoder {
               .replaceAll(RegExp(r'<[^>]+>'), ''),
         ).trim();
       case 'markdown':
-        return raw
-            .replaceAll(RegExp(r'^#{1,6}[ \t]*', multiLine: true), '')
-            .replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'), (m) => m[1]!)
-            .replaceAllMapped(RegExp(r'\*(.+?)\*'), (m) => m[1]!)
-            .replaceAllMapped(RegExp(r'`(.+?)`'), (m) => m[1]!)
+        return _markdownInline(_markdownBlocks(raw))
+            .replaceAll(RegExp(r'<[^>\n]+>'), '')
             .trim();
       default:
         return raw;

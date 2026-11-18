@@ -78,6 +78,12 @@ class ReaderStrings {
     this.pdfEncrypted = 'PDF 已加密或无法解析',
     this.brightness = '亮度',
     this.fontSize = '字号',
+    this.copy = '复制',
+    this.copied = '已复制',
+    this.note = '笔记',
+    this.save = '保存',
+    this.selectTextFirst = '请先在正文中选中文字',
+    this.swipeSensitivity = '滑动灵敏度',
   });
 
   /// Marker instance: the readers pick the preset matching the ambient
@@ -168,6 +174,12 @@ class ReaderStrings {
     pdfEncrypted: 'The PDF is encrypted or cannot be parsed',
     brightness: 'Brightness',
     fontSize: 'Font size',
+    copy: 'Copy',
+    copied: 'Copied',
+    note: 'Note',
+    save: 'Save',
+    selectTextFirst: 'Select some text first',
+    swipeSensitivity: 'Swipe sensitivity',
   );
 
   /// Thai.
@@ -242,6 +254,12 @@ class ReaderStrings {
     pdfEncrypted: 'PDF ถูกเข้ารหัสหรือไม่สามารถอ่านได้',
     brightness: 'ความสว่าง',
     fontSize: 'ขนาดตัวอักษร',
+    copy: 'คัดลอก',
+    copied: 'คัดลอกแล้ว',
+    note: 'บันทึกย่อ',
+    save: 'บันทึก',
+    selectTextFirst: 'เลือกข้อความก่อน',
+    swipeSensitivity: 'ความไวการปัด',
   );
 
   /// Vietnamese.
@@ -316,6 +334,12 @@ class ReaderStrings {
     pdfEncrypted: 'PDF bị mã hóa hoặc không thể đọc được',
     brightness: 'Độ sáng',
     fontSize: 'Cỡ chữ',
+    copy: 'Sao chép',
+    copied: 'Đã sao chép',
+    note: 'Ghi chú',
+    save: 'Lưu',
+    selectTextFirst: 'Hãy chọn văn bản trước',
+    swipeSensitivity: 'Độ nhạy vuốt',
   );
 
   /// Indonesian (Bahasa Indonesia).
@@ -390,6 +414,12 @@ class ReaderStrings {
     pdfEncrypted: 'PDF terenkripsi atau tidak dapat dibaca',
     brightness: 'Kecerahan',
     fontSize: 'Ukuran font',
+    copy: 'Salin',
+    copied: 'Disalin',
+    note: 'Catatan',
+    save: 'Simpan',
+    selectTextFirst: 'Pilih teks terlebih dahulu',
+    swipeSensitivity: 'Sensitivitas gesek',
   );
 
   /// Malay (Bahasa Melayu).
@@ -464,6 +494,12 @@ class ReaderStrings {
     pdfEncrypted: 'PDF disulitkan atau tidak dapat dibaca',
     brightness: 'Kecerahan',
     fontSize: 'Saiz fon',
+    copy: 'Salin',
+    copied: 'Disalin',
+    note: 'Nota',
+    save: 'Simpan',
+    selectTextFirst: 'Pilih teks dahulu',
+    swipeSensitivity: 'Kepekaan leret',
   );
 
   /// Filipino.
@@ -538,6 +574,12 @@ class ReaderStrings {
     pdfEncrypted: 'Naka-encrypt ang PDF o hindi mabasa',
     brightness: 'Liwanag',
     fontSize: 'Laki ng font',
+    copy: 'Kopyahin',
+    copied: 'Nakopya',
+    note: 'Tala',
+    save: 'I-save',
+    selectTextFirst: 'Pumili muna ng teksto',
+    swipeSensitivity: 'Sensitibo ng swipe',
   );
 
   /// Traditional Chinese.
@@ -612,6 +654,12 @@ class ReaderStrings {
     pdfEncrypted: 'PDF 已加密或無法解析',
     brightness: '亮度',
     fontSize: '字級',
+    copy: '複製',
+    copied: '已複製',
+    note: '筆記',
+    save: '儲存',
+    selectTextFirst: '請先在內文中選取文字',
+    swipeSensitivity: '滑動靈敏度',
   );
 
   /// Presets keyed by language code.
@@ -736,6 +784,12 @@ class ReaderStrings {
   final String pdfEncrypted;
   final String brightness;
   final String fontSize;
+  final String copy;
+  final String copied;
+  final String note;
+  final String save;
+  final String selectTextFirst;
+  final String swipeSensitivity;
 
   /// "{n} more results are outside the preview" with [n] filled in.
   String outsideTrial(int n) => searchOutsideTrial.replaceAll('{n}', '$n');

@@ -41,6 +41,43 @@ class EpubViewerController {
 
   /// The book's `dc:language` (e.g. `en`, `zh-CN`), when declared.
   Future<String?> language() async => _state?._bridge?.getLanguage();
+
+  /// Clears the text selection inside the book.
+  Future<void> clearSelection() async => _state?._bridge?.clearSelection();
+}
+
+/// A text range the reader selected inside an EPUB.
+class EpubSelection {
+  const EpubSelection({required this.cfi, required this.text});
+
+  /// CFI range of the selection.
+  final String cfi;
+  final String text;
+}
+
+/// A highlight drawn inside an EPUB.
+class EpubHighlightMark {
+  const EpubHighlightMark({
+    required this.id,
+    required this.cfi,
+    required this.color,
+  });
+
+  final String id;
+
+  /// CFI range.
+  final String cfi;
+  final Color color;
+
+  @override
+  bool operator ==(Object other) =>
+      other is EpubHighlightMark &&
+      other.id == id &&
+      other.cfi == cfi &&
+      other.color == color;
+
+  @override
+  int get hashCode => Object.hash(id, cfi, color);
 }
 
 /// EPUB viewer using offline epub.js inside [webview_flutter].
@@ -65,7 +102,19 @@ class EpubViewer extends StatefulWidget {
     this.customFonts = const {},
     this.strings = ReaderStrings.auto,
     this.rtl = false,
+    this.highlights = const [],
+    this.onTextSelected,
+    this.onHighlightTapped,
   });
+
+  /// Highlights drawn over the text (CFI ranges).
+  final List<EpubHighlightMark> highlights;
+
+  /// Called when the reader selects text inside the book.
+  final ValueChanged<EpubSelection>? onTextSelected;
+
+  /// Called with the highlight id when a drawn highlight is tapped.
+  final ValueChanged<String>? onHighlightTapped;
 
   /// Force right-to-left text and page progression (otherwise the book decides).
   final bool rtl;
@@ -225,6 +274,21 @@ class _EpubViewerState extends State<EpubViewer> {
               if (payload is Map) {
                 widget.onTrialBoundaryReached?.call(payload['next'] == true);
               }
+            case 'selection':
+              if (payload is Map &&
+                  payload['cfi'] is String &&
+                  payload['text'] is String) {
+                widget.onTextSelected?.call(
+                  EpubSelection(
+                    cfi: payload['cfi'] as String,
+                    text: payload['text'] as String,
+                  ),
+                );
+              }
+            case 'highlightTapped':
+              if (payload is Map && payload['id'] is String) {
+                widget.onHighlightTapped?.call(payload['id'] as String);
+              }
             case 'fontSizeChanged':
               if (payload is Map && payload['percent'] is num) {
                 widget.onFontSizeChanged?.call(
@@ -296,6 +360,7 @@ class _EpubViewerState extends State<EpubViewer> {
       if (!mounted || generation != _generation) return;
       _bookOpened = true;
       await _applyTypography();
+      await _applyHighlights();
       final chapters = await bridge.getToc();
       if (!mounted || generation != _generation) return;
       widget.onChaptersLoaded?.call(chapters);
@@ -305,6 +370,19 @@ class _EpubViewerState extends State<EpubViewer> {
     } finally {
       _opening = false;
       if (mounted && generation != _generation) _openBookIfNeeded();
+    }
+  }
+
+  Future<void> _applyHighlights() async {
+    final bridge = _bridge;
+    if (bridge == null || !_bookOpened) return;
+    try {
+      await bridge.setHighlights([
+        for (final h in widget.highlights)
+          {'id': h.id, 'cfi': h.cfi, 'color': _cssColor(h.color)},
+      ]);
+    } catch (e) {
+      _report(e);
     }
   }
 
@@ -367,6 +445,9 @@ class _EpubViewerState extends State<EpubViewer> {
         oldWidget.rtl != widget.rtl ||
         !mapEquals(oldWidget.customFonts, widget.customFonts)) {
       _applyTypography();
+    }
+    if (!listEquals(oldWidget.highlights, widget.highlights)) {
+      _applyHighlights();
     }
     if (oldWidget.readingMode != widget.readingMode && _bookOpened) {
       _bridge

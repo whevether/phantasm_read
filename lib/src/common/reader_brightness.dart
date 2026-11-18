@@ -19,9 +19,7 @@ class ReaderBrightness extends ChangeNotifier {
 
   Future<void> apply(double brightness) {
     if (_disposed) return Future.value();
-    _pending = _pending
-        .then((_) => _apply(brightness))
-        .catchError((Object e) {
+    _pending = _pending.then((_) => _apply(brightness)).catchError((Object e) {
       debugPrint('ReaderBrightness.apply failed: $e');
     });
     return _pending;
@@ -43,7 +41,9 @@ class ReaderBrightness extends ChangeNotifier {
       mode = BrightnessMode.system;
       _didSetSystem = true;
     } catch (e) {
-      debugPrint('ReaderBrightness: system brightness unavailable, using overlay: $e');
+      debugPrint(
+        'ReaderBrightness: system brightness unavailable, using overlay: $e',
+      );
       mode = BrightnessMode.overlay;
     }
     if (!_disposed) notifyListeners();

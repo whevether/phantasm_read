@@ -7,6 +7,10 @@
 * 打包：签名文件（`key.properties`、`*.jks`）不再被 Git 跟踪，示例工程在没有 `key.properties` 时回退调试签名（见 `example/android/key.properties.example`），固定依赖改为 `^` 范围，新增 `unorm_dart`，`.pubignore` 排除示例/文档/测试。
 
 新增功能
+* 高亮：5 种颜色、笔记、EPUB 精确范围并在书中绘制、改色/编辑/复制/删除；复制选中文字（文本与 EPUB）；EPUB 图片放大查看。
+* `ReaderSettings.swipeSensitivity`（0.5–2.0），漫画/PDF 工具栏与小说设置面板新增滑块；`ComicReader.webtoonGap` / `webtoonCacheExtent`。
+* 更好的 Markdown 展平（链接、图片、列表、引用、代码围栏、分隔线、表格、下划线式标题）；横向文本页现在可选中文字。
+* 新增文案：`copy`、`copied`、`note`、`save`、`selectTextFirst`、`swipeSensitivity`（所有预设）。
 * EPUB 自动滚屏（竖读连续滚动、横读定时翻页），EPUB 阅读页加入 CSP meta。
 * 音量键翻页（`ReaderSettings.volumeKeyPaging`，默认关闭）、`ReaderStats`/`ReaderStatsTracker` 及 `ComicReader`/`NovelReader`/`PdfReader` 的 `onStats`、`ReaderSyncConflictPolicy`、`ReaderBookmarkStore.updateHighlightNote`、`ComicReader.onNextChapterRequested`、`loadReaderCustomFont`、`ChineseTextConverter`（单字映射，仅常用字）。
 * 东南亚界面预设 `ReaderStrings.th` / `vi` / `id` / `ms` / `fil`，以及 `ReaderStrings.forLocale` / `forLanguageCode`。

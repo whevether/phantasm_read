@@ -27,6 +27,8 @@ class ComicWebtoonView extends StatefulWidget {
     this.onReachedEnd,
     this.onReachedStart,
     this.placeholderAspect = 1.4,
+    this.gap = 0,
+    this.cacheExtent,
   });
 
   final int count;
@@ -49,6 +51,13 @@ class ComicWebtoonView extends StatefulWidget {
   /// [comicWebtoonPlaceholderHeight]) so the lazy list does not build every
   /// item at once.
   final double placeholderAspect;
+
+  /// Empty space (logical pixels) between pages.
+  final double gap;
+
+  /// How far beyond the viewport pages are built/preloaded (logical pixels);
+  /// `null` keeps the framework default.
+  final double? cacheExtent;
 
   @override
   State<ComicWebtoonView> createState() => _ComicWebtoonViewState();
@@ -185,9 +194,17 @@ class _ComicWebtoonViewState extends State<ComicWebtoonView> {
       child: ListView.builder(
         controller: _controller,
         itemCount: widget.count,
+        scrollCacheExtent: widget.cacheExtent == null
+            ? null
+            : ScrollCacheExtent.pixels(widget.cacheExtent!),
         itemBuilder: (context, i) => KeyedSubtree(
           key: _keys.putIfAbsent(i, GlobalKey.new),
-          child: widget.itemBuilder(i),
+          child: widget.gap > 0 && i < widget.count - 1
+              ? Padding(
+                  padding: EdgeInsets.only(bottom: widget.gap),
+                  child: widget.itemBuilder(i),
+                )
+              : widget.itemBuilder(i),
         ),
       ),
     );

@@ -74,6 +74,12 @@ List<String> _all(ReaderStrings s) => [
   s.pdfEncrypted,
   s.brightness,
   s.fontSize,
+  s.copy,
+  s.copied,
+  s.note,
+  s.save,
+  s.selectTextFirst,
+  s.swipeSensitivity,
 ];
 
 Widget _toolbar(ReaderStrings strings) => MaterialApp(

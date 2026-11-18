@@ -146,6 +146,14 @@ class EpubBridge {
   Future<void> setAutoScroll(bool enabled, {double speed = 40}) async =>
       requests.call('setAutoScroll', [enabled, speed]);
 
+  /// Replaces the highlights drawn in the book. Each entry needs `id`, `cfi`
+  /// (a CFI range) and `color` (a CSS color).
+  Future<void> setHighlights(List<Map<String, String>> items) async =>
+      requests.call('setHighlights', [items]);
+
+  /// Clears the current text selection inside the book.
+  Future<void> clearSelection() async => requests.call('clearSelection');
+
   Future<void> setFlow(String flow) async => requests.call('setFlow', [flow]);
   Future<List<Map<String, String>>> search(String query) async {
     final result = await requests.call('search', [query]);

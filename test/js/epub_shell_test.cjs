@@ -174,12 +174,74 @@ async function fixture() {
     assert.ok(css.includes("Alpha") && css.includes("Beta"), `fonts css: ${css}`);
     assert.ok(!css.includes("Bad"));
 
+    // Text selection is reported with a CFI range and the selected text.
+    await page.evaluate(() => window.epubBridge.display("c1.xhtml#head"));
+    await page.waitForFunction(() => window.epubBridge.getText().includes("needle1"));
+    const selectedBefore = await page.evaluate(() => window.messages.length);
+    await page.frames()[1].evaluate(() => {
+      const p = document.querySelector("p");
+      const range = document.createRange();
+      range.setStart(p.firstChild, 0);
+      range.setEnd(p.firstChild, 7);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await page.waitForFunction(
+      (n) => window.messages.slice(n).some((m) => m.type === "selection"),
+      selectedBefore,
+    );
+    const selected = await page.evaluate(
+      (n) => window.messages.slice(n).find((m) => m.type === "selection").payload,
+      selectedBefore,
+    );
+    assert.ok(selected.cfi.startsWith("epubcfi("), selected.cfi);
+    assert.ok(selected.cfi.includes(","), `range cfi expected: ${selected.cfi}`);
+    assert.ok(selected.text.includes("needle1"), selected.text);
+
+    // Highlights are drawn, survive a flow switch and are tappable.
+    await page.evaluate(
+      (cfi) =>
+        window.epubBridge.setHighlights([{ id: "h1", cfi, color: "rgb(1,2,3)" }]),
+      selected.cfi,
+    );
+    await page.waitForFunction(() => document.querySelector("g.phantasm-hl"));
+    await page.evaluate(() => window.epubBridge.clearSelection());
+    await page.evaluate(() => window.epubBridge.setFlow("scrolled"));
+    await page.waitForFunction(() => document.querySelector("g.phantasm-hl"));
+    await page.evaluate(() => window.epubBridge.setHighlights([]));
+    await page.waitForFunction(() => !document.querySelector("g.phantasm-hl"));
+    await page.evaluate(() => window.epubBridge.setFlow("paginated"));
+    await page.waitForFunction(() => window.epubBridge.getText().includes("needle1"));
+
+    // Tapping an image opens the zoom viewer; a single tap closes it again.
+    const live = page.frames().filter((f) => f !== page.mainFrame() && !f.isDetached());
+    const bookFrame = live[live.length - 1];
+    await bookFrame.evaluate(() => {
+      const img = document.createElement("img");
+      img.id = "zoomme";
+      img.src =
+        "data:image/svg+xml;utf8," +
+        encodeURIComponent(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><rect width='120' height='120' fill='red'/></svg>",
+        );
+      document.body.prepend(img);
+    });
+    for (let i = 0; i < 50; i++) {
+      if (await bookFrame.evaluate(() => document.getElementById("zoomme").naturalWidth > 0)) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await bookFrame.evaluate(() => document.getElementById("zoomme").click());
+    await page.waitForFunction(() => document.getElementById("imgViewer"));
+    await page.mouse.click(300, 300);
+    await page.waitForFunction(() => !document.getElementById("imgViewer"));
+
     // Forcing RTL must not break rendering.
     await page.evaluate(() => window.epubBridge.setDirection("rtl"));
     await page.evaluate(() => window.epubBridge.close());
     assert.deepEqual(errors, []);
     console.log(
-      "EPUB browser tests passed: real ZIP parsing, nested TOC, search, async replies, script isolation, chapter/anchor trial clipping, flow and font reset, chunked upload, language, dead links, multiple fonts and RTL.",
+      "EPUB browser tests passed: real ZIP parsing, nested TOC, search, async replies, script isolation, chapter/anchor trial clipping, flow and font reset, chunked upload, language, dead links, multiple fonts, text selection, highlights and image zoom, and RTL.",
     );
   } finally {
     await browser.close();

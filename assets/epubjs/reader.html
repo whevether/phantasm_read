@@ -52,9 +52,141 @@
         startBoundary = null,
         endBoundary = null,
         opening = 0;
+      let highlights = [],
+        appliedHighlights = [];
       let autoScrollActive = false,
         autoScrollFrame = 0,
         autoScrollTimer = null;
+      // Full-screen image viewer: pinch / pan / double-tap zoom, tap to close.
+      function closeImageViewer() {
+        const old = document.getElementById("imgViewer");
+        if (old) old.remove();
+      }
+      function openImageViewer(src) {
+        closeImageViewer();
+        const overlay = document.createElement("div");
+        overlay.id = "imgViewer";
+        overlay.style.cssText =
+          "position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.92);" +
+          "z-index:99999;touch-action:none;overflow:hidden";
+        const img = document.createElement("img");
+        img.src = src;
+        img.draggable = false;
+        img.style.cssText =
+          "position:absolute;left:50%;top:50%;max-width:100%;max-height:100%;" +
+          "transform-origin:center center;user-select:none;-webkit-user-drag:none";
+        overlay.appendChild(img);
+        let scale = 1,
+          tx = 0,
+          ty = 0;
+        const pointers = new Map();
+        let pinchBase = 0,
+          pinchScale = 1,
+          moved = 0,
+          lastTap = 0,
+          closeTimer = null;
+        const render = () => {
+          img.style.transform =
+            "translate(calc(-50% + " +
+            tx +
+            "px), calc(-50% + " +
+            ty +
+            "px)) scale(" +
+            scale +
+            ")";
+        };
+        const clamp = () => {
+          scale = Math.min(6, Math.max(1, scale));
+          if (scale === 1) {
+            tx = 0;
+            ty = 0;
+          }
+        };
+        const dist = () => {
+          const [a, b] = Array.from(pointers.values());
+          return Math.hypot(a.x - b.x, a.y - b.y);
+        };
+        overlay.addEventListener("pointerdown", (e) => {
+          overlay.setPointerCapture(e.pointerId);
+          pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pointers.size === 1) moved = 0;
+          if (pointers.size === 2) {
+            pinchBase = dist();
+            pinchScale = scale;
+          }
+        });
+        overlay.addEventListener("pointermove", (e) => {
+          const p = pointers.get(e.pointerId);
+          if (!p) return;
+          const dx = e.clientX - p.x,
+            dy = e.clientY - p.y;
+          p.x = e.clientX;
+          p.y = e.clientY;
+          moved += Math.abs(dx) + Math.abs(dy);
+          if (pointers.size === 2 && pinchBase) {
+            scale = (pinchScale * dist()) / pinchBase;
+            clamp();
+          } else if (pointers.size === 1 && scale > 1) {
+            tx += dx;
+            ty += dy;
+          }
+          render();
+        });
+        const end = (e) => {
+          if (!pointers.has(e.pointerId)) return;
+          pointers.delete(e.pointerId);
+          if (pointers.size === 0 && moved < 10) {
+            const now = Date.now();
+            if (now - lastTap < 300) {
+              clearTimeout(closeTimer);
+              scale = scale > 1 ? 1 : 2.5;
+              clamp();
+              render();
+              lastTap = 0;
+            } else {
+              lastTap = now;
+              closeTimer = setTimeout(() => {
+                if (scale === 1) closeImageViewer();
+              }, 300);
+            }
+          }
+        };
+        overlay.addEventListener("pointerup", end);
+        overlay.addEventListener("pointercancel", end);
+        document.body.appendChild(overlay);
+      }
+      // Re-applies the host's highlights after a rendition is (re)created.
+      function paintHighlights() {
+        if (!rendition) return;
+        for (const cfi of appliedHighlights) {
+          try {
+            rendition.annotations.remove(cfi, "highlight");
+          } catch (_) {
+            /* Already gone. */
+          }
+        }
+        appliedHighlights = [];
+        for (const h of highlights) {
+          if (!h || typeof h.cfi !== "string" || !h.cfi.startsWith("epubcfi("))
+            continue;
+          try {
+            rendition.annotations.highlight(
+              h.cfi,
+              { id: h.id },
+              () => post("highlightTapped", { id: h.id, cfi: h.cfi }),
+              "phantasm-hl",
+              {
+                fill: String(h.color || "#FFEB3B"),
+                "fill-opacity": "0.4",
+                "mix-blend-mode": "multiply",
+              },
+            );
+            appliedHighlights.push(h.cfi);
+          } catch (error) {
+            post("warning", { message: String(error) });
+          }
+        }
+      }
       function stopAutoScroll() {
         autoScrollActive = false;
         if (autoScrollFrame) cancelAnimationFrame(autoScrollFrame);
@@ -272,6 +404,19 @@
           { passive: false },
         );
         doc.addEventListener("click", (e) => {
+          const t = e.target;
+          if (
+            t &&
+            t.tagName === "IMG" &&
+            !(t.closest && t.closest("a[href]")) &&
+            (t.naturalWidth || 0) >= 48 &&
+            String(doc.getSelection && doc.getSelection()) === ""
+          ) {
+            openImageViewer(t.currentSrc || t.src);
+            return;
+          }
+        });
+        doc.addEventListener("click", (e) => {
           const a = e.target.closest && e.target.closest("a[href]");
           if (!a) return;
           e.preventDefault();
@@ -304,6 +449,15 @@
         if (direction) rendition.direction(direction);
         rendition.hooks.content.register(wireContents);
         rendition.hooks.content.register((contents) => applyFonts([contents]));
+        rendition.on("selected", (cfiRange, contents) => {
+          try {
+            const text = String(contents.range(cfiRange).toString()).trim();
+            if (text) post("selection", { cfi: cfiRange, text });
+          } catch (error) {
+            post("warning", { message: String(error) });
+          }
+        });
+        paintHighlights();
         rendition.on("relocated", async (location) => {
           const start = location && location.start;
           if (!start) return;
@@ -591,8 +745,22 @@
           }
           return true;
         },
+        // Highlights: [{id, cfi (range), color (css)}], replaces the old set.
+        setHighlights(list) {
+          highlights = Array.isArray(list) ? list : [];
+          paintHighlights();
+          return highlights.length;
+        },
+        clearSelection() {
+          if (!rendition) return;
+          for (const c of rendition.getContents()) {
+            const sel = c.window.getSelection();
+            if (sel) sel.removeAllRanges();
+          }
+        },
         close() {
           stopAutoScroll();
+          closeImageViewer();
           opening++;
           if (rendition) rendition.destroy();
           if (book) book.destroy();

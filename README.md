@@ -151,7 +151,7 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 ### Text (txt / md / html)
 
 - Encoding: UTF-8 with GBK / GB18030 fallback; optional `encoding`
-- Strip HTML tags; light Markdown cleanup
+- Strip HTML tags; Markdown is flattened to readable text (links/images keep their label, lists get bullets, quotes/fences/rules/tables/setext underlines lose their syntax)
 - Vertical: scrollable selectable text
 - Horizontal: paragraph pagination + `PageView` (`rtl` supported)
 - Chapter heuristics: `第×章` / `Chapter N` / `# heading`
@@ -161,7 +161,10 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 ### Navigation, typography & toolbar
 
 - Prev/next chapter & page, chapter tree, full-text search
-- Bookmarks (CFI or paragraph index), highlights (stored excerpt; yellow on text path)
+- Bookmarks (CFI or paragraph index); highlights in 5 colors with optional notes (text: whole paragraph; EPUB: exact selected range drawn in the book); long-press a highlight in the list, or tap it in an EPUB, to recolor / edit the note / copy / delete
+- Copy selected text (text formats and EPUB); selecting text in an EPUB opens a Copy / Note / color sheet
+- EPUB: tap an image to open a full-screen viewer (pinch, pan, double-tap zoom, tap to close)
+- Swipe sensitivity slider (`ReaderSettings.swipeSensitivity`, 0.5-2.0) for comic, novel and PDF paging
 - Font size / line height / margins / letter spacing / align
 - Font chips: `NovelFontOption.defaults`
 - Themes: `NovelThemePreset.defaults` (Cream / White / Sepia / Green / Dark / AMOLED)
@@ -375,7 +378,10 @@ Notes:
 | TTS | Text path speaks the current paragraph, EPUB the visible page text; long text is read in chunks. Set `NovelReader.ttsLanguage` (engine must implement `NovelTtsLanguageAware`) or rely on the EPUB `dc:language` |
 | Auto-scroll | Text and EPUB (EPUB: continuous scroll in vertical mode, timed page turns in horizontal mode) |
 | Media overlay → EPUB | Karaoke jumps by paragraph, not CFI |
-| Novel bookmark/highlight list UI | Persist yes; no list sheet (comic has bookmark list) |
+| Novel bookmark/highlight list UI | Bookmark sheet lists bookmarks and highlights (with notes); long-press a highlight to edit it |
+| EPUB highlights | Stored as CFI ranges; highlights saved by older versions (a single point CFI) are listed but not drawn |
+| Swipe sensitivity | `ReaderSettings.swipeSensitivity` scales drag distance and the fling threshold of page swipes; webtoon scrolling is unaffected |
+| Webtoon spacing | `ComicReader.webtoonGap` (page gap) and `webtoonCacheExtent` (preload distance) |
 | Ink | `enableInk`; toolbar undo/clear; saved per book and location (`ReaderInk`) |
 | Large PDFs | Page rasterization; high page count / `rasterDpi` increases memory and load time |
 | Android PDF | System `PdfRenderer` requires **PDF 1.7+**, unencrypted; older/hand-written PDFs may fail |
