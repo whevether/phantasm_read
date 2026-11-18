@@ -7,6 +7,7 @@ Trial protection, data safety and packaging
 * Packaging: signing files (`key.properties`, `*.jks`) are no longer tracked, the example falls back to debug signing without `key.properties` (see `example/android/key.properties.example`), pinned dependencies became `^` ranges, `unorm_dart` was added and `.pubignore` keeps examples/docs/tests out of the package.
 
 New features
+* EPUB auto-scroll (continuous scrolling in vertical mode, timed page turns in horizontal mode) and a CSP meta tag in the EPUB reader page.
 * Volume-key paging (`ReaderSettings.volumeKeyPaging`, off by default), `ReaderStats`/`ReaderStatsTracker` with `onStats` on `ComicReader`, `NovelReader` and `PdfReader`, `ReaderSyncConflictPolicy`, `ReaderBookmarkStore.updateHighlightNote`, `ComicReader.onNextChapterRequested`, `loadReaderCustomFont` and `ChineseTextConverter` (character-level, common characters only).
 * Southeast Asian UI presets `ReaderStrings.th` / `vi` / `id` / `ms` / `fil` with `ReaderStrings.forLocale` / `forLanguageCode`.
 * Webtoon continuous scroll (`ComicReadingMode.webtoon`, `ComicWebtoonView`), opt-in comic auto-crop (`ReaderSettings.comicAutoCrop`, `CroppedImageProvider`), `NovelReader.customFonts` (text via `FontLoader`, EPUB via `@font-face`; one font per family name), localisable toolbar/ink/dialog strings.

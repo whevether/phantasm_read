@@ -7,6 +7,7 @@
 * 打包：签名文件（`key.properties`、`*.jks`）不再被 Git 跟踪，示例工程在没有 `key.properties` 时回退调试签名（见 `example/android/key.properties.example`），固定依赖改为 `^` 范围，新增 `unorm_dart`，`.pubignore` 排除示例/文档/测试。
 
 新增功能
+* EPUB 自动滚屏（竖读连续滚动、横读定时翻页），EPUB 阅读页加入 CSP meta。
 * 音量键翻页（`ReaderSettings.volumeKeyPaging`，默认关闭）、`ReaderStats`/`ReaderStatsTracker` 及 `ComicReader`/`NovelReader`/`PdfReader` 的 `onStats`、`ReaderSyncConflictPolicy`、`ReaderBookmarkStore.updateHighlightNote`、`ComicReader.onNextChapterRequested`、`loadReaderCustomFont`、`ChineseTextConverter`（单字映射，仅常用字）。
 * 东南亚界面预设 `ReaderStrings.th` / `vi` / `id` / `ms` / `fil`，以及 `ReaderStrings.forLocale` / `forLanguageCode`。
 * 条漫连续滚动（`ComicReadingMode.webtoon`、`ComicWebtoonView`）、可选漫画自动裁边（`ReaderSettings.comicAutoCrop`、`CroppedImageProvider`）、`NovelReader.customFonts`（文本走 `FontLoader`，EPUB 走 `@font-face`；同一字体族名只取一份）、工具栏/笔迹/对话框文案可本地化。
