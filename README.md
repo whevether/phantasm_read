@@ -166,7 +166,7 @@ Also: `NovelBytesSource.file` / `asset` / `url` / `bytes`.
 - Font chips: `NovelFontOption.defaults`
 - Themes: `NovelThemePreset.defaults` (Cream / White / Sepia / Green / Dark / AMOLED)
 - Vertical ↔ horizontal, brightness, keep-awake
-- Auto-scroll (**text path**), TTS, media-overlay play/pause
+- Auto-scroll (text and EPUB), TTS, media-overlay play/pause
 - Top progress bar seeks by chapter ratio (trial-aware readable range)
 - Keyboard / volume keys; tap anywhere toggles toolbar only (page via swipe / toolbar)
 - Trial: `trialLimit` (counts **chapters**) + `onTrialLimitReached`; body truncation; swipe overscroll / chapter list / search / toolbar overflow callbacks

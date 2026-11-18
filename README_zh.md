@@ -166,7 +166,7 @@ ComicReader(
 - 字体芯片：`NovelFontOption.defaults`（系统 / Serif / Sans / Mono）
 - 主题预设：`NovelThemePreset.defaults`（Cream / White / Sepia / Green / Dark / AMOLED）
 - 竖读 ↔ 横读切换、亮度、不熄屏
-- 自动滚屏（**文本路径**）、TTS、Media Overlay 播放 / 暂停
+- 自动滚屏（文本与 EPUB）、TTS、Media Overlay 播放 / 暂停
 - 顶栏进度条按章节比例跳转（试读时按可读章节范围）
 - 键盘 / 音量键翻页；任意点按只显隐工具栏（翻页靠滑动 / 工具栏）
 - 试读：`trialLimit`（按**章**计数）+ `onTrialLimitReached`；正文截断；滑动越界 / 目录 / 搜索 / 工具栏翻章越界时回调宿主
