@@ -24,7 +24,8 @@ class ReaderKv {
       if (kIsWeb) return await ToStore.open(dbName: _dbName);
       final dir = await getApplicationSupportDirectory();
       return await ToStore.open(dbPath: dir.path, dbName: _dbName);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderKv: failed to open ToStore: $e');
       // Allow a later call to retry instead of caching a failed open.
       _db = null;
       rethrow;

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:synchronized/synchronized.dart';
 
 import 'reader_kv.dart';
@@ -120,7 +121,8 @@ class ReaderBookmarkStore {
           .whereType<Map>()
           .map((e) => ReaderBookmark.fromJson(Map<String, dynamic>.from(e)))
           .toList();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderBookmarkStore.listBookmarks: corrupt data: $e');
       return const [];
     }
   }
@@ -157,7 +159,8 @@ class ReaderBookmarkStore {
           .whereType<Map>()
           .map((e) => ReaderHighlight.fromJson(Map<String, dynamic>.from(e)))
           .toList();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderBookmarkStore.listHighlights: corrupt data: $e');
       return const [];
     }
   }

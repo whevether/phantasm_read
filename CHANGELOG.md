@@ -26,6 +26,7 @@ Stats, performance and robustness
 * `ReaderStatsTracker` uses a monotonic `Stopwatch`, pauses in the background, ignores fly-by pages (`minDwell`), counts independent of `persistProgress`.
 * Webtoon: measured heights, `ComicWebtoonController.jumpToIndex`, end/start callbacks, page changes when the count changes; auto-crop analyses a thumbnail and no longer leaks images.
 * PDF: encrypted documents show a localised hint, URL downloads have a timeout and 300 MB cap, rasterisation is limited to two concurrent jobs. Settings saves are coalesced, book-byte identity hashes are cached, `ReaderBrightness` swallows plugin errors, volume-key repeats are handled in all readers.
+* Storage backend migrated from `shared_preferences` to `tostore` (all keys `isGlobal: true`); added GitHub Actions CI; silent exceptions in `ReaderBrightness`/`ReaderWakeLock`/`NovelReader` now log via `debugPrint`.
 * Export `NovelBytesSource`; `ReaderTrialLimit`, `NovelTypography` and `ReaderSettings` implement `==`/`hashCode`.
 
 Known limitations (not verified on real devices): PDF page counting still scans the whole document before the first page is shown; encrypted-PDF detection depends on the platform's error text; Android encoding aliases, very large EPUBs and screen-reader behaviour were not tested on hardware.

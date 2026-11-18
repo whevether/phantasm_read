@@ -55,7 +55,7 @@ PdfReader(
 |------|----------|
 | 漫画 | 多图源 / CBZ、竖横滑、RTL、缩放、双页、适应、缩略图、书签、试读、水印、手绘、同步回调 |
 | 小说 | EPUB + txt/md/html、搜索、嵌套目录、主题排版、TTS、Media Overlay、书签划线、水印、手绘 |
-| PDF | `pdf` 3.13.1 + `printing` 光栅化；与漫画对齐的工具栏 / 书签 / 试读 / 手绘 / 同步等 |
+| PDF | `printing` 光栅化（间接依赖 `pdf`）；与漫画对齐的工具栏 / 书签 / 试读 / 手绘 / 同步等 |
 | 共用 | 设置 / 进度 / 书签持久化、亮度、不息屏、点击分区、进度条、导出 JSON、`onSync` |
 
 ---
@@ -234,7 +234,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF（`PdfReader`）
 
-基于 **`pdf` 3.13.1** + **`printing` 5.15.1**：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。页式能力与漫画阅读器对齐（不含小说专属的 TTS / 章目录 / 正文搜索）。
+基于 **`printing` 5.15.1**（`pdf` 为其间接依赖）：通过 [Printing.raster](https://pub.dev/packages/printing) 将 PDF 页光栅化为位图，在 **Linux / Windows / Android / iOS / macOS** 上可用（桌面端由 printing 内置 pdfium 支持）。页式能力与漫画阅读器对齐（不含小说专属的 TTS / 章目录 / 正文搜索）。
 
 ### 已实现
 
@@ -335,7 +335,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | API | 说明 |
 |-----|------|
 | `ReaderSettings` | 亮度、不熄屏、小说排版、前/背景色、小说方向、漫画适应/双页/背景、`tapZonesEnabled`（PDF）、沉浸式 |
-| `ReaderSettingsStore` | SharedPreferences 全局持久化（`persistSettings`） |
+| `ReaderSettingsStore` | ToStore 全局持久化（`persistSettings`，底层见 `lib/src/common/reader_kv.dart`，键均为 `isGlobal: true`） |
 | `NovelTypography` | 字号、行高、字体、字距、对齐、页边距 |
 | `NovelThemePreset` / `NovelFontOption` | 主题与字体预设 |
 
@@ -373,7 +373,7 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | 漫画双页 | 仅横向生效；开启双页时若当前为竖向会自动切横向 |
 | EPUB 试读 | 章级拦截与回调；EPUB 内连续翻页越界依赖章节边界，深度跳转可能需宿主配合 |
 | TTS | 文本路径朗读当前段，EPUB 朗读当前可见页文字；长文本分段朗读。可设 `NovelReader.ttsLanguage`（引擎需实现 `NovelTtsLanguageAware`），EPUB 默认取 `dc:language` |
-| 自动滚屏 | 仅文本路径；EPUB 无效 |
+| 自动滚屏 | 文本路径与 EPUB 均支持（EPUB 竖读为连续滚动，横读为定时翻页） |
 | Media Overlay → EPUB | karaoke 按段落跳转，不跟 CFI |
 | 小说书签 / 高亮列表 UI | 可增删入库；无独立列表页（漫画有书签列表） |
 | 墨迹批注 | `enableInk`；工具栏有撤销/清空；按书籍与位置保存（`ReaderInk`） |
@@ -396,6 +396,14 @@ ReaderTrialLimit.chapters(3, startChapter: 0); // 小说
 | `onStats` / `strings` | `ComicReader`、`NovelReader`、`PdfReader` 均支持；统计仅计入可读页 |
 
 ---
+
+## 密钥与签名安全
+
+- `*.jks` 和 `example/android/key.properties` 不入库，已由 `.gitignore` 忽略；不要提交任何真实密钥、密码或签名文件。
+- 没有本地签名配置时，示例应用的 release 构建会自动回退到 debug 签名，克隆后可直接运行。
+- 需要本地 release 签名时：复制 `example/android/key.properties.example` 为 `example/android/key.properties`，填入别名、密码和 `storeFile`，详见 `example/jks/README.md`。
+- 示例签名只用于本地打包，**不可**用于正式发布。
+- 如果密钥文件曾被提交过，历史记录中仍然存在；若含真实密码，请视为已泄露并更换密钥。
 
 ## 示例应用
 

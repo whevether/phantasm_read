@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../novel_chapter.dart';
@@ -142,6 +143,9 @@ class EpubBridge {
         .toList();
   }
 
+  Future<void> setAutoScroll(bool enabled, {double speed = 40}) async =>
+      requests.call('setAutoScroll', [enabled, speed]);
+
   Future<void> setFlow(String flow) async => requests.call('setFlow', [flow]);
   Future<List<Map<String, String>>> search(String query) async {
     final result = await requests.call('search', [query]);
@@ -212,8 +216,9 @@ class EpubBridgeMessage {
       if (map is Map && map['type'] is String) {
         return EpubBridgeMessage(type: map['type'], payload: map['payload']);
       }
-    } catch (_) {
+    } catch (e) {
       /* Ignore non-protocol messages from a document. */
+      debugPrint('EpubBridge: ignored non-protocol message: $e');
     }
     return EpubBridgeMessage(type: 'invalid');
   }

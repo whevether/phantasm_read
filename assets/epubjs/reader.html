@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title>EPUB Reader</title>
     <style>
       html,
@@ -48,6 +52,16 @@
         startBoundary = null,
         endBoundary = null,
         opening = 0;
+      let autoScrollActive = false,
+        autoScrollFrame = 0,
+        autoScrollTimer = null;
+      function stopAutoScroll() {
+        autoScrollActive = false;
+        if (autoScrollFrame) cancelAnimationFrame(autoScrollFrame);
+        if (autoScrollTimer) clearInterval(autoScrollTimer);
+        autoScrollFrame = 0;
+        autoScrollTimer = null;
+      }
       const cfiUtil = () => new ePub.CFI();
       function post(type, payload) {
         if (window.EpubChannel)
@@ -548,7 +562,37 @@
             rendition.themes.override("color", fg);
           }
         },
+        // Auto-scroll: continuous scroll in scrolled flow, timed page turns in
+        // paginated flow. speed is roughly px/second. enabled=false stops it.
+        setAutoScroll(enabled, speed) {
+          stopAutoScroll();
+          if (!enabled || !rendition) return false;
+          const pxPerSec = Math.max(5, Math.min(600, Number(speed) || 40));
+          if (flow === "scrolled") {
+            let last = null;
+            const step = (ts) => {
+              if (!autoScrollActive) return;
+              const container =
+                rendition && rendition.manager && rendition.manager.container;
+              if (container && last !== null) {
+                container.scrollTop += (pxPerSec * (ts - last)) / 1000;
+              }
+              last = ts;
+              autoScrollFrame = requestAnimationFrame(step);
+            };
+            autoScrollActive = true;
+            autoScrollFrame = requestAnimationFrame(step);
+          } else {
+            const ms = Math.max(2000, (60000 * 40) / pxPerSec / 4);
+            autoScrollActive = true;
+            autoScrollTimer = setInterval(() => {
+              if (rendition) rendition.next().catch(() => {});
+            }, ms);
+          }
+          return true;
+        },
         close() {
+          stopAutoScroll();
           opening++;
           if (rendition) rendition.destroy();
           if (book) book.destroy();

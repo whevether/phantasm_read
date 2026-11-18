@@ -140,6 +140,9 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
   final TrialGestureNotifier _trialGesture = TrialGestureNotifier();
   bool _bookmarkBusy = false;
 
+  /// True while page 0 is shown as a preview during the page-count scan.
+  bool _previewing = false;
+
   /// PDF has no webtoon strip; treat it as vertical.
   static ComicReadingMode _normalizeMode(ComicReadingMode mode) =>
       mode == ComicReadingMode.webtoon ? ComicReadingMode.vertical : mode;
@@ -255,6 +258,13 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       }
       final bytes = await _loadBytes(source);
       if (!mounted || version != _loadVersion) return;
+      // First-page-first: build the cache now so page 0 can be shown while
+      // the page count is still being determined.
+      _rasterCache?.dispose();
+      _rasterCache = PdfRasterCache(bytes);
+      if (widget.trialLimit == null && content == 0) {
+        setState(() => _previewing = true);
+      }
       // Count with tiny rasters, discarding pixels immediately. Full-resolution
       // pages are rendered only when visible, rather than expanding the book.
       var count = 0;
@@ -267,8 +277,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _settings = settings;
       _bookmarks = bookmarks;
       _totalPages = count;
-      _rasterCache?.dispose();
-      _rasterCache = PdfRasterCache(bytes);
+      _previewing = false;
       _currentPage = _logicalIndexForContent(content);
       _rebindPageController();
       await _session.apply(_settings);
@@ -630,6 +639,7 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       _sessionTimer?.cancel();
       _rasterCache?.dispose();
       _rasterCache = null;
+      _previewing = false;
       _totalPages = 0;
       _mode = _normalizeMode(widget.readingMode);
       _bootstrap(restorePage: restore);
@@ -694,6 +704,24 @@ class _PdfReaderState extends State<PdfReader> with WidgetsBindingObserver {
       );
     }
     if (_loading || _pageController == null) {
+      if (_previewing && _rasterCache != null) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            ColoredBox(color: Color(_settings.comicBackground)),
+            _rasterWidget(0),
+            const Positioned(
+              right: 16,
+              bottom: 16,
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ],
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
 

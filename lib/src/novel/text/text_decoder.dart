@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:charset_converter/charset_converter.dart';
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../file_bytes.dart';
 
@@ -148,8 +148,9 @@ class NovelTextDecoder {
     for (final platformName in names) {
       try {
         return await CharsetConverter.decode(platformName, bytes);
-      } catch (_) {
+      } catch (e) {
         // Try the next platform alias.
+        debugPrint('TextDecoder: $platformName unavailable: $e');
       }
     }
     return null;

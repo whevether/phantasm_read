@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:synchronized/synchronized.dart';
 
 import 'novel_reading_mode.dart';
@@ -47,7 +48,8 @@ class ReaderSettingsStore {
     if (raw == null) return null;
     try {
       return _fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderSettingsStore.load: corrupt settings ignored: $e');
       return null;
     }
   }

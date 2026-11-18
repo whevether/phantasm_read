@@ -55,7 +55,7 @@ PdfReader(
 |------|---------|
 | Comic | Multi-source / CBZ, vertical & horizontal, RTL, zoom, double-page, fit, thumbs, bookmarks, trial, watermark, ink, sync hook |
 | Novel | EPUB + txt/md/html, search, nested TOC, themes, TTS, media overlay, bookmarks/highlights, watermark, ink |
-| PDF | `pdf` 3.13.1 + `printing` raster; comic-aligned toolbar / bookmarks / trial / ink / sync |
+| PDF | `printing` raster (`pdf` is transitive); comic-aligned toolbar / bookmarks / trial / ink / sync |
 | Shared | Settings / progress / bookmark stores, brightness, wakelock, tap zones, progress bar, JSON export, `onSync` |
 
 ---
@@ -233,7 +233,7 @@ final json = await ReaderBookmarkStore.instance.exportJson('novel_1');
 
 ## PDF (`PdfReader`)
 
-Uses **`pdf` 3.13.1** + **`printing` 5.15.1**: [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium). Page-based features align with `ComicReader` (no novel-only TTS / chapter TOC / text search).
+Uses **`printing` 5.15.1** (`pdf` is a transitive dependency): [Printing.raster](https://pub.dev/packages/printing) converts each page to a bitmap. Works on **Linux / Windows / Android / iOS / macOS** (desktop via printing’s bundled pdfium). Page-based features align with `ComicReader` (no novel-only TTS / chapter TOC / text search).
 
 ### Implemented
 
@@ -335,7 +335,7 @@ Notes:
 | API | Role |
 |-----|------|
 | `ReaderSettings` | Brightness, keep-awake, novel typography/colors/mode, comic fit/double-page/bg, `tapZonesEnabled` (PDF), immersive |
-| `ReaderSettingsStore` | SharedPreferences persistence |
+| `ReaderSettingsStore` | ToStore persistence (`lib/src/common/reader_kv.dart`, keys use `isGlobal: true`) |
 | `NovelTypography` | Size, line height, font, letter spacing, align, margins |
 | `NovelThemePreset` / `NovelFontOption` | Theme & font presets |
 
@@ -373,7 +373,7 @@ Notes:
 | Comic double-page | Horizontal only; enabling double-page auto-switches from vertical |
 | EPUB trial | Chapter-level blocking + callbacks; in-book paging may need host handling at deep jumps |
 | TTS | Text path speaks the current paragraph, EPUB the visible page text; long text is read in chunks. Set `NovelReader.ttsLanguage` (engine must implement `NovelTtsLanguageAware`) or rely on the EPUB `dc:language` |
-| Auto-scroll | Text path only |
+| Auto-scroll | Text and EPUB (EPUB: continuous scroll in vertical mode, timed page turns in horizontal mode) |
 | Media overlay → EPUB | Karaoke jumps by paragraph, not CFI |
 | Novel bookmark/highlight list UI | Persist yes; no list sheet (comic has bookmark list) |
 | Ink | `enableInk`; toolbar undo/clear; saved per book and location (`ReaderInk`) |
@@ -396,6 +396,14 @@ Notes:
 | Trial limits | Enforced client-side only; the host passes full content, so real paywalls must serve only the trial range from the server |
 
 ---
+
+## Key & signing security
+
+- `*.jks` and `example/android/key.properties` are not tracked and are ignored by `.gitignore`; never commit real keys, passwords or keystores.
+- Without a local signing config, the example app's release build falls back to debug signing, so a fresh clone runs out of the box.
+- For local release signing, copy `example/android/key.properties.example` to `example/android/key.properties` and fill in the alias, passwords and `storeFile` (see `example/jks/README.md`).
+- The example signing is for local packaging only and **must not** be used for production releases.
+- If a key file was ever committed, it remains in git history; if it held real passwords, treat them as leaked and rotate the keys.
 
 ## Example app
 

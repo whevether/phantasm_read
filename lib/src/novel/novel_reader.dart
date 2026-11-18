@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show debugPrint, listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
@@ -318,7 +318,9 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     widget.ttsEngine?.setCompletionHandler(null);
     try {
       await widget.ttsEngine?.stop();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('NovelReader: tts stop failed: $e');
+    }
     await overlay?.dispose();
   }
 
@@ -477,6 +479,9 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     if (_autoScroll == null) return;
     _autoScroll?.cancel();
     _autoScroll = null;
+    if (_isEpub) {
+      _epubController.setAutoScroll(false).catchError((Object _) {});
+    }
     if (mounted) setState(() {});
   }
 
@@ -721,6 +726,99 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openBookmarkSheet() async {
+    _bookmarks = await ReaderBookmarkStore.instance.listBookmarks(_bookId);
+    _highlights = await ReaderBookmarkStore.instance.listHighlights(_bookId);
+    if (!mounted) return;
+    Future<void> jump(String? cfi, int? paragraph) async {
+      if (cfi != null && cfi.isNotEmpty && _isEpub) {
+        await _epubController.goToChapter(cfi);
+      } else if (paragraph != null) {
+        if (!_isParagraphReadable(paragraph)) {
+          _notifyTrialLimit(
+            ReaderTrialLimitAction.seek,
+            _chapterIndexForParagraph(paragraph),
+          );
+          return;
+        }
+        await _textKey.currentState?.jumpToParagraph(paragraph);
+      }
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * 0.6,
+            child: ListView(
+              children: [
+                ListTile(title: Text(_strings.bookmarks)),
+                for (final b in _bookmarks)
+                  ListTile(
+                    leading: const Icon(Icons.bookmark),
+                    title: Text(
+                      b.title.isNotEmpty
+                          ? b.title
+                          : (b.paragraphIndex != null
+                                ? _strings.pageN(b.paragraphIndex! + 1)
+                                : _strings.bookmarks),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      jump(b.cfi, b.paragraphIndex);
+                    },
+                    trailing: IconButton(
+                      tooltip: _strings.delete,
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () async {
+                        await ReaderBookmarkStore.instance
+                            .removeBookmark(_bookId, b.id);
+                        _bookmarks = await ReaderBookmarkStore.instance
+                            .listBookmarks(_bookId);
+                        if (sheetContext.mounted) Navigator.pop(sheetContext);
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                  ),
+                if (_highlights.isNotEmpty)
+                  ListTile(title: Text(_strings.highlight)),
+                for (final h in _highlights)
+                  ListTile(
+                    leading: Icon(Icons.highlight, color: Color(h.color)),
+                    title: Text(
+                      h.excerpt.startsWith('epubcfi(')
+                          ? _strings.highlight
+                          : h.excerpt,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      jump(h.cfi, h.paragraphIndex);
+                    },
+                    trailing: IconButton(
+                      tooltip: _strings.delete,
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () async {
+                        await ReaderBookmarkStore.instance
+                            .removeHighlight(_bookId, h.id);
+                        _highlights = await ReaderBookmarkStore.instance
+                            .listHighlights(_bookId);
+                        if (sheetContext.mounted) Navigator.pop(sheetContext);
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openSearch() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -848,6 +946,16 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       _stopAutoScroll();
       return;
     }
+    if (_isEpub) {
+      // The WebView drives scrolling; this timer is only the active marker.
+      _autoScroll = Timer.periodic(const Duration(hours: 1), (_) {});
+      _epubController.setAutoScroll(true).catchError((Object e) {
+        debugPrint('NovelReader: EPUB auto scroll failed: $e');
+        _stopAutoScroll();
+      });
+      setState(() {});
+      return;
+    }
     _autoScroll = Timer.periodic(
       Duration(
         milliseconds:
@@ -871,7 +979,8 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
             final advanced = await _page(1);
             if (!advanced) _stopAutoScroll();
           }
-        } catch (_) {
+        } catch (e) {
+          debugPrint('NovelReader: auto scroll failed: $e');
           _stopAutoScroll();
         } finally {
           _autoBusy = false;
@@ -921,7 +1030,8 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
       }
       try {
         await engine.speak(chunks[next++]);
-      } catch (_) {
+      } catch (e) {
+        debugPrint('NovelReader: tts speak failed: $e');
         if (mounted) setState(() => _ttsSpeaking = false);
       }
     }
@@ -1174,6 +1284,7 @@ class _NovelReaderState extends State<NovelReader> with WidgetsBindingObserver {
                   onPrevPage: () => _page(-1),
                   onNextPage: () => _page(1),
                   onBookmark: _toggleBookmark,
+                  onBookmarkList: _openBookmarkSheet,
                   onHighlight: _addHighlight,
                   enableHighlights: widget.enableHighlights,
                   onAutoScroll: _toggleAutoScroll,
@@ -1250,6 +1361,7 @@ class _NovelToolbar extends StatelessWidget {
     required this.onPrevPage,
     required this.onNextPage,
     required this.onBookmark,
+    required this.onBookmarkList,
     required this.onHighlight,
     required this.enableHighlights,
     required this.onAutoScroll,
@@ -1271,6 +1383,7 @@ class _NovelToolbar extends StatelessWidget {
   final VoidCallback onPrevPage;
   final VoidCallback onNextPage;
   final VoidCallback onBookmark;
+  final VoidCallback onBookmarkList;
   final VoidCallback onHighlight;
   final bool enableHighlights;
   final VoidCallback onAutoScroll;
@@ -1361,6 +1474,15 @@ class _NovelToolbar extends StatelessWidget {
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(
                             Icons.bookmark_border,
+                            color: Colors.white,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: strings.bookmarks,
+                          onPressed: onBookmarkList,
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(
+                            Icons.collections_bookmark,
                             color: Colors.white,
                           ),
                         ),

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'reader_kv.dart';
 
 /// Reading progress for a book identified by [bookId].
@@ -72,7 +74,8 @@ class ReaderProgressStore {
       return ReaderProgress.fromJson(
         Map<String, dynamic>.from(jsonDecode(raw) as Map),
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderProgressStore.load: corrupt data for $bookId: $e');
       return null;
     }
   }

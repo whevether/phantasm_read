@@ -21,7 +21,9 @@ class ReaderBrightness extends ChangeNotifier {
     if (_disposed) return Future.value();
     _pending = _pending
         .then((_) => _apply(brightness))
-        .catchError((Object _) {});
+        .catchError((Object e) {
+      debugPrint('ReaderBrightness.apply failed: $e');
+    });
     return _pending;
   }
 
@@ -40,7 +42,8 @@ class ReaderBrightness extends ChangeNotifier {
       await ScreenBrightness.instance.setApplicationScreenBrightness(v);
       mode = BrightnessMode.system;
       _didSetSystem = true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ReaderBrightness: system brightness unavailable, using overlay: $e');
       mode = BrightnessMode.overlay;
     }
     if (!_disposed) notifyListeners();
@@ -57,7 +60,9 @@ class ReaderBrightness extends ChangeNotifier {
     if (_didSetSystem && _supportsSystemBrightness) {
       try {
         await ScreenBrightness.instance.resetApplicationScreenBrightness();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('ReaderBrightness.restore failed: $e');
+      }
     }
     _didSetSystem = false;
   }

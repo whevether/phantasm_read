@@ -28,6 +28,11 @@ class EpubViewerController {
 
   Future<void> prev() async => _state?.prev();
 
+  /// Starts/stops auto-scroll (continuous in vertical mode, timed page turns
+  /// in horizontal mode). [speed] is roughly pixels per second.
+  Future<void> setAutoScroll(bool enabled, {double speed = 40}) async =>
+      _state?._bridge?.setAutoScroll(enabled, speed: speed);
+
   Future<List<Map<String, String>>> search(String query) async =>
       _state?.search(query) ?? const [];
 

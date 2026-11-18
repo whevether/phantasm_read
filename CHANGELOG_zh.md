@@ -26,6 +26,7 @@
 * `ReaderStatsTracker` 使用单调 `Stopwatch`，切后台暂停，忽略快速滑过的页面（`minDwell`），与 `persistProgress` 无关。
 * 条漫：实测高度、`ComicWebtoonController.jumpToIndex`、到头/到尾回调、页数变化时更新；自动裁边只分析缩略图且不再泄漏图片。
 * PDF：加密文档给出本地化提示，URL 下载有超时与 300 MB 上限，光栅化最多 2 路并发。设置保存合并写入，书籍字节哈希有缓存，`ReaderBrightness` 吞掉插件异常，所有阅读器都处理音量键重复事件。
+* 存储后端由 `shared_preferences` 迁移到 `tostore`（所有键 `isGlobal: true`）；新增 GitHub Actions CI；`ReaderBrightness`/`ReaderWakeLock`/`NovelReader` 的静默异常改为调试日志。
 * 导出 `NovelBytesSource`；`ReaderTrialLimit`、`NovelTypography`、`ReaderSettings` 实现 `==`/`hashCode`。
 
 已知限制（未在真机验证）：PDF 仍需先扫描全部页数才显示首页；加密 PDF 的识别依赖平台错误文本；Android 编码别名、超大 EPUB 与读屏体验未在真机测试。
